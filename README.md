@@ -1,0 +1,2 @@
+# TermAI
+AI terminal
