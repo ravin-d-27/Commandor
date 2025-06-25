@@ -241,7 +241,7 @@ Command:"""
         if len(dir_name) > 20:
             dir_name = "..." + dir_name[-17:]
         
-        return f"{self._colorize(dir_name, 'cyan')} {self._colorize('$', 'white')} "
+        return f"{self._colorize("TerminusAI", 'cyan')} {self._colorize('$', 'white')} "
 
     def show_help(self):
         """Display help information."""
