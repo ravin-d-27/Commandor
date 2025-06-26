@@ -1,21 +1,92 @@
-MIT License
+# TerminusAI License
 
-Copyright (c) 2025 Ravin D
+## Open Source License with Commercial Attribution Requirements
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This software is **free and open source** for all users, with specific attribution requirements for commercial use.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+### Personal/Individual Use (Free)
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+**Permission is hereby granted, free of charge, to any individual** to use, copy, modify, distribute, and contribute to this software for **personal, educational, or non-commercial purposes** without any restrictions or attribution requirements.
+
+### Commercial Use (Free with Attribution)
+
+**Commercial use is permitted free of charge**, provided that commercial users comply with the following attribution requirements:
+
+**Required Attribution:**
+- Display **"Powered by TerminusAI"** prominently in your product interface, documentation, or about section
+- Include a clickable link to the official repository: `https://github.com/ravin-d-27/TerminusAI`
+- Mention TerminusAI in relevant marketing materials, press releases, or product announcements
+- If feasible, submit a brief case study or testimonial about your usage for our community showcase
+
+**Commercial use includes:**
+- Use by organizations or businesses of any size
+- Integration into commercial products or services
+- Use that generates revenue or commercial benefit
+- Use by government agencies or institutions
+
+### Contributions Welcome
+
+**All contributions are welcome and encouraged:**
+- Pull requests, bug reports, and feature suggestions are appreciated
+- Contributors retain copyright to their contributions
+- By contributing, you agree your contributions will be licensed under the same terms
+- All contributors will be acknowledged in the project documentation
+
+### Reproduction and Redistribution
+
+**Permitted:**
+- ✅ Fork the repository and create derivatives
+- ✅ Modify and distribute modified versions
+- ✅ Use components in other projects
+- ✅ Create packages or distributions
+
+**Required for Reproduction/Redistribution:**
+- ❌ **You may NOT claim this software as your own original work**
+- ❌ **You may NOT remove or modify copyright notices**
+- ❌ **You may NOT redistribute without including this license**
+- ✅ **You MUST clearly indicate if changes were made**
+- ✅ **You MUST provide attribution to the original project**
+
+### Attribution Requirements for Derivatives
+
+If you create a derivative work or redistribute this software:
+- Include original copyright notice and this license
+- Clearly state that your work is based on TerminusAI
+- Provide link to the original repository
+- If you've made modifications, clearly indicate what was changed
+
+### Open Source Commitment
+
+This project is committed to remaining **free and open source forever**:
+- No future license changes that restrict existing freedoms
+- Community-driven development
+- Transparent decision making
+- Welcoming to all contributors regardless of background
+
+### Enforcement and Compliance
+
+- Attribution compliance is verified through community monitoring
+- Non-compliance will result in polite contact requesting correction
+- Repeated violations may result in license termination for that user
+- Community members are encouraged to report non-compliance
+
+### Definitions
+
+- **Personal Use**: Use by individuals for their own personal, educational, or research purposes
+- **Commercial Use**: Any use by organizations, businesses, or for commercial advantage
+- **Attribution**: Proper credit given to the original project and maintainers
+- **Derivative Work**: Software that incorporates, modifies, or builds upon this project
+
+### Disclaimer
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+---
+
+**Copyright (c) 2025 Ravin D**
+
+**This software is proudly open source and free for everyone!**
+
+For questions about attribution requirements or to submit your case study, contact: [your-email@example.com]
+
+**⭐ If this project helps you, please star it on GitHub to help others discover it!**
