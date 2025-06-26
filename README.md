@@ -6,16 +6,16 @@ An intelligent terminal assistant that uses AI to convert natural language to sh
 [![License](https://img.shields.io/badge/License-Open%20Source%20with%20Attribution-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.6%2B-blue.svg)](https://python.org)
 
-## 🚀 Features
+## Features
 
-- 🤖 **AI-powered natural language to shell command conversion**
-- 🎨 **Colorized output and beautiful terminal interface**
-- 📚 **Command history with readline support**
-- 🛡️ **Safety checks for dangerous commands**
-- 🌐 **Cross-platform support** (Windows, macOS, Linux)
-- 🎯 **Context-aware suggestions** based on current directory
+- **AI-powered natural language to shell command conversion**
+- **Colorized output and beautiful terminal interface**
+- **Command history with readline support**
+- **Safety checks for dangerous commands**
+- **Cross-platform support** (Windows, macOS, Linux)
+- **Context-aware suggestions** based on current directory
 
-## 📦 Installation
+## Installation
 
 ### Install from Source (Recommended)
 
@@ -50,7 +50,7 @@ An intelligent terminal assistant that uses AI to convert natural language to sh
    echo "GEMINI=your_gemini_api_key_here" > ~/.env
    ```
 
-## ⚙️ Setup
+## Setup
 
 1. **Get a Gemini API Key:**
    - Go to [Google AI Studio](https://makersuite.google.com/app/apikey)
@@ -68,7 +68,7 @@ An intelligent terminal assistant that uses AI to convert natural language to sh
    export GEMINI=your_api_key_here
    ```
 
-## 🎯 Usage
+## Usage
 
 Once installed, you can start TerminusAI from anywhere in your terminal:
 
@@ -87,7 +87,7 @@ terminusai
 | `/clear` | Clear the screen |
 | `exit` or `Ctrl+C` | Exit TerminusAI |
 
-### 💡 Examples
+### Examples
 
 ```bash
 terminusai
@@ -104,7 +104,7 @@ TerminusAI $ /ai find large files over 100MB
 AI → find . -type f -size +100M -exec ls -lh {} \;
 ```
 
-## 🛠️ Troubleshooting
+## Troubleshooting
 
 ### Command not found
 
@@ -143,16 +143,16 @@ For better experience on Windows, install pyreadline3:
 pip install pyreadline3
 ```
 
-## 🤝 Contributing
+## Contributing
 
 We welcome contributions from everyone! Here's how you can help:
 
 ### Ways to Contribute
-- 🐛 **Report bugs** by opening an issue
-- 💡 **Suggest features** or improvements
-- 📝 **Improve documentation**
-- 🔧 **Submit pull requests** with bug fixes or new features
-- ⭐ **Star the repository** to help others discover it
+- **Report bugs** by opening an issue
+- **Suggest features** or improvements
+- **Improve documentation**
+- **Submit pull requests** with bug fixes or new features
+- **Star the repository** to help others discover it
 
 ### Development Setup
 
@@ -180,7 +180,7 @@ We welcome contributions from everyone! Here's how you can help:
 - Update documentation as needed
 - Be respectful and inclusive in discussions
 
-## 📄 License
+## License
 
 TerminusAI is **free and open source** for everyone! 🎉
 
@@ -198,14 +198,14 @@ If you're using TerminusAI commercially, we just ask that you:
 
 See [LICENSE](LICENSE) for complete details.
 
-## 🌟 Showcase
+## Showcase
 
 **Using TerminusAI in your project?** We'd love to feature you! Submit your use case by opening an issue or contacting us.
 
 ### Featured Users
 *Be the first to be featured here by using TerminusAI commercially and letting us know!*
 
-## 🗑️ Uninstallation
+## Uninstallation
 
 To uninstall TerminusAI:
 
@@ -213,13 +213,13 @@ To uninstall TerminusAI:
 pip uninstall terminusai
 ```
 
-## 📞 Support & Contact
+## Support & Contact
 
 - 🐛 **Issues**: [GitHub Issues](https://github.com/ravin-d-27/TerminusAI/issues)
 - 📧 **Email**: [ravin.d3107@outlook.com]
 - 💬 **Discussions**: [GitHub Discussions](https://github.com/ravin-d-27/TerminusAI/discussions)
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Thanks to all contributors who help make TerminusAI better
 - Built with Google's Gemini AI
@@ -227,6 +227,6 @@ pip uninstall terminusai
 
 ---
 
-**⭐ If TerminusAI helps you, please star this repository to help others discover it!**
+**If TerminusAI helps you, please star this repository to help others discover it!**
 
 **Made with ❤️ by Ravin D**
