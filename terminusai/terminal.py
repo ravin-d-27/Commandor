@@ -136,28 +136,28 @@ class AITerminal:
         
         prompt = f"""You are an expert system administrator helping convert natural language to shell commands.
 
-SYSTEM INFORMATION:
-- OS: {self.system_info['os']} {self.system_info['os_version']}
-- Architecture: {self.system_info['architecture']}
-- Shell: {self.system_info['shell']}
-- User: {self.system_info['user']}
+        SYSTEM INFORMATION:
+        - OS: {self.system_info['os']} {self.system_info['os_version']}
+        - Architecture: {self.system_info['architecture']}
+        - Shell: {self.system_info['shell']}
+        - User: {self.system_info['user']}
 
-CURRENT CONTEXT:
-{context}
+        CURRENT CONTEXT:
+        {context}
 
-{recent_commands}
+        {recent_commands}
 
-INSTRUCTION: "{instruction}"
+        INSTRUCTION: "{instruction}"
 
-RULES:
-1. Reply with ONLY the shell command, no explanations
-2. Use commands appropriate for {self.system_info['os']}
-3. Consider the current directory context
-4. Use safe commands (avoid destructive operations without explicit confirmation)
-5. For file operations, use relative paths when possible
-6. If the instruction is ambiguous, choose the most common interpretation
+        RULES:
+        1. Reply with ONLY the shell command, no explanations
+        2. Use commands appropriate for {self.system_info['os']}
+        3. Consider the current directory context
+        4. Use safe commands (avoid destructive operations without explicit confirmation)
+        5. For file operations, use relative paths when possible
+        6. If the instruction is ambiguous, choose the most common interpretation
 
-Command:"""
+        Command:"""
 
         try:
             response = self.model.generate_content(prompt)
@@ -246,40 +246,40 @@ Command:"""
     def show_help(self):
         """Display help information."""
         help_text = f"""
-{self._colorize('AI Terminal Help', 'bold')}
-{self._colorize('=' * 50, 'blue')}
+        {self._colorize('AI Terminal Help', 'bold')}
+        {self._colorize('=' * 50, 'blue')}
 
-{self._colorize('Commands:', 'green')}
-  /ai <instruction>  - Convert natural language to shell command
-  /help             - Show this help message
-  /info             - Show system information
-  /history          - Show recent command history
-  /clear            - Clear the screen
-  exit or Ctrl+C    - Exit the terminal
+        {self._colorize('Commands:', 'green')}
+        /ai <instruction>  - Convert natural language to shell command
+        /help             - Show this help message
+        /info             - Show system information
+        /history          - Show recent command history
+        /clear            - Clear the screen
+        exit or Ctrl+C    - Exit the terminal
 
-{self._colorize('Examples:', 'yellow')}
-  /ai list all python files
-  /ai create a new directory called projects
-  /ai find files larger than 100MB
-  /ai show disk usage
-  /ai install package using pip
+        {self._colorize('Examples:', 'yellow')}
+        /ai list all python files
+        /ai create a new directory called projects
+        /ai find files larger than 100MB
+        /ai show disk usage
+        /ai install package using pip
 
-{self._colorize('Regular shell commands work too!', 'magenta')}
-"""
+        {self._colorize('Regular shell commands work too!', 'magenta')}
+        """
         print(help_text)
 
     def show_info(self):
         """Display system information."""
         info_text = f"""
-{self._colorize('System Information', 'bold')}
-{self._colorize('=' * 30, 'blue')}
-OS: {self.system_info['os']} {self.system_info['os_version']}
-Architecture: {self.system_info['architecture']}
-Python: {self.system_info['python_version']}
-Shell: {self.system_info['shell']}
-User: {self.system_info['user']}
-Current Directory: {self.current_dir}
-"""
+        {self._colorize('System Information', 'bold')}
+        {self._colorize('=' * 30, 'blue')}
+        OS: {self.system_info['os']} {self.system_info['os_version']}
+        Architecture: {self.system_info['architecture']}
+        Python: {self.system_info['python_version']}
+        Shell: {self.system_info['shell']}
+        User: {self.system_info['user']}
+        Current Directory: {self.current_dir}
+        """
         print(info_text)
 
     def show_history(self):
@@ -381,16 +381,3 @@ Current Directory: {self.current_dir}
                 break
             except Exception as e:
                 print(self._colorize(f"Unexpected error: {e}", 'red'))
-
-def main():
-    """Entry point for the AI Terminal."""
-    try:
-        terminal = AITerminal()
-        terminal.run()
-    except KeyboardInterrupt:
-        print("\n👋 Goodbye!")
-    except Exception as e:
-        print(f"Failed to start AI Terminal: {e}")
-
-if __name__ == "__main__":
-    main()
