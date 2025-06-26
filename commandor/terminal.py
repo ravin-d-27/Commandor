@@ -241,7 +241,7 @@ class AITerminal:
         if len(dir_name) > 20:
             dir_name = "..." + dir_name[-17:]
         
-        return f"{self._colorize("TerminusAI", 'cyan')} {self._colorize('$', 'white')} "
+        return f"{self._colorize("Commandor", 'cyan')} {self._colorize('$', 'white')} "
 
     def show_help(self):
         """Display help information."""
@@ -313,7 +313,7 @@ class AITerminal:
 
     def run(self):
         """Main terminal loop."""
-        print(f"{self._colorize('TerminusAI', 'bold')} {self._colorize('Ready!', 'green')}")
+        print(f"{self._colorize('Commandor', 'bold')} {self._colorize('Ready!', 'green')}")
         if READLINE_AVAILABLE:
             print("Your Terminal Assistant is ready to go!")
         else:

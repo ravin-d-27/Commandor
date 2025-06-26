@@ -4,18 +4,18 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="terminusai",
+    name="Commandor",
     version="1.0.0",
     description="An intelligent terminal assistant that uses AI to convert natural language to shell commands",
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="Ravin D",
     author_email="ravin.d3107@outlook.com",
-    url="https://github.com/ravin-d-27/TerminusAI",
+    url="https://github.com/ravin-d-27/Commandor",
     project_urls={
-        "Bug Reports": "https://github.com/ravin-d-27/TerminusAI/issues",
-        "Source": "https://github.com/ravin-d-27/TerminusAI",
-        "Documentation": "https://github.com/ravin-d-27/TerminusAI#readme",
+        "Bug Reports": "https://github.com/ravin-d-27/Commandor/issues",
+        "Source": "https://github.com/ravin-d-27/Commandor",
+        "Documentation": "https://github.com/ravin-d-27/Commandor#readme",
     },
     packages=find_packages(),
     install_requires=[
@@ -26,7 +26,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "terminusai=terminusai.main:main",
+            "commandor=commandor.main:main",
         ],
     },
     python_requires=">=3.7",
