@@ -1,19 +1,35 @@
 # Commandor
 
-An intelligent terminal assistant that uses AI to convert natural language to shell commands.
+An intelligent terminal assistant that uses AI to convert natural language to shell commands and answer questions directly.
 
 [![GitHub stars](https://img.shields.io/github/stars/ravin-d-27/Commandor?style=social)](https://github.com/ravin-d-27/Commandor/stargazers)
 [![License](https://img.shields.io/badge/License-Open%20Source%20with%20Attribution-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.6%2B-blue.svg)](https://python.org)
 
-## Features
+## ✨ Latest Features (v2.0)
 
-- **AI-powered natural language to shell command conversion**
-- **Colorized output and beautiful terminal interface**
-- **Command history with readline support**
-- **Safety checks for dangerous commands**
-- **Cross-platform support** (Windows, macOS, Linux)
-- **Context-aware suggestions** based on current directory
+### 🤖 **Direct AI Chat with `/ask`**
+Ask the AI assistant any question directly without generating commands! Perfect for:
+- Getting programming help and explanations
+- Learning new concepts and best practices
+- Technical troubleshooting and advice
+- General knowledge queries
+
+### 🎨 **Beautiful Colorful Interface**
+- **Stunning ASCII art logo** with rainbow colors
+- **Enhanced visual experience** with emojis and improved styling
+- **Better color coding** for different command types
+- **Professional yet fun** terminal presentation
+
+## Core Features
+
+- **🧠 AI-powered natural language to shell command conversion**
+- **💬 Direct AI questioning and assistance**
+- **🌈 Colorized output and beautiful terminal interface**
+- **📚 Command history with readline support**
+- **🛡️ Safety checks for dangerous commands**
+- **🖥️ Cross-platform support** (Windows, macOS, Linux)
+- **📍 Context-aware suggestions** based on current directory
 
 ## Installation
 
@@ -78,30 +94,99 @@ commandor
 
 ### Available Commands
 
-| Command | Description |
-|---------|-------------|
-| `/ai <instruction>` | Convert natural language to shell command |
-| `/help` | Show help message |
-| `/info` | Show system information |
-| `/history` | Show command history |
-| `/clear` | Clear the screen |
-| `exit` or `Ctrl+C` | Exit Commandor |
+| Command | Description | New! |
+|---------|-------------|------|
+| `/ai <instruction>` | Convert natural language to shell command | |
+| `/ask <question>` | Ask AI any question directly | ✨ **NEW** |
+| `/help` | Show help message | |
+| `/info` | Show system information | |
+| `/history` | Show command history | |
+| `/clear` | Clear the screen | |
+| `exit` or `Ctrl+C` | Exit Commandor | |
 
-### Examples
+### Command Generation Examples
 
 ```bash
 commandor
-commandor $ /ai list all python files
-AI → find . -name "*.py" -type f
+🚀 COMMANDOR - Your AI-Powered Terminal Assistant 🚀
 
-commandor $ /ai create a directory called projects
-AI → mkdir projects
+Commandor $ /ai list all python files
+🤖 AI → find . -name "*.py" -type f
 
-commandor $ /ai show disk usage
-AI → df -h
+Commandor $ /ai create a directory called projects
+🤖 AI → mkdir projects
 
-commandor $ /ai find large files over 100MB
-AI → find . -type f -size +100M -exec ls -lh {} \;
+Commandor $ /ai show disk usage
+🤖 AI → df -h
+
+Commandor $ /ai find large files over 100MB
+🤖 AI → find . -type f -size +100M -exec ls -lh {} \;
+```
+
+### ✨ NEW: Direct AI Questions
+
+Ask the AI assistant anything directly without generating commands:
+
+```bash
+Commandor $ /ask What is the difference between Python and JavaScript?
+🤔 Thinking...
+
+🤖 AI Response:
+──────────────────────────────────────────────────
+Python and JavaScript are both popular programming languages but serve different purposes:
+
+**Python:**
+- General-purpose language, great for data science, AI, web backends
+- Interpreted, readable syntax
+- Strong in scientific computing and automation
+- Used for desktop applications, web servers, data analysis
+
+**JavaScript:**
+- Originally for web browsers, now also server-side (Node.js)
+- Essential for web development and interactive websites
+- Event-driven and asynchronous
+- Used for frontend, backend, and mobile apps
+
+Both are beginner-friendly but excel in different domains!
+──────────────────────────────────────────────────
+
+Commandor $ /ask How do I optimize my Python code for better performance?
+🤔 Thinking...
+
+🤖 AI Response:
+──────────────────────────────────────────────────
+Here are key strategies for Python optimization:
+
+1. **Use built-in functions** - They're implemented in C and much faster
+2. **List comprehensions** - Faster than traditional loops
+3. **Avoid global variables** - Local variables are accessed faster
+4. **Use appropriate data structures** - Sets for membership testing, deques for queues
+5. **Profile your code** - Use cProfile to find bottlenecks
+6. **NumPy for numerical operations** - Vectorized operations are much faster
+7. **Cache expensive function calls** - Use @lru_cache decorator
+8. **Use generators** - For memory-efficient iteration
+
+Focus on the biggest bottlenecks first for maximum impact!
+──────────────────────────────────────────────────
+```
+
+### More `/ask` Examples
+
+```bash
+# Programming Help
+/ask Explain machine learning concepts for beginners
+/ask What are Git best practices?
+/ask How do I debug memory leaks in Python?
+
+# System Administration
+/ask What are the differences between various Linux distributions?
+/ask How do I secure my server?
+/ask Explain Docker vs Virtual Machines
+
+# General Learning
+/ask What is quantum computing?
+/ask How does blockchain technology work?
+/ask Explain REST APIs
 ```
 
 ## Troubleshooting
@@ -142,6 +227,26 @@ For better experience on Windows, install pyreadline3:
 ```bash
 pip install pyreadline3
 ```
+
+## What's New in v2.0
+
+### 🆕 Direct AI Assistant (`/ask`)
+- **Ask any question** directly to the AI without generating commands
+- **Perfect for learning** - get explanations, tutorials, and advice
+- **Context-aware responses** - AI understands your system environment
+- **Clean formatting** - Beautiful response display with visual separators
+
+### 🎨 Enhanced Visual Experience
+- **Colorful ASCII art logo** - Eye-catching Commandor branding on startup
+- **Rainbow color palette** - More vibrant and engaging interface
+- **Emoji indicators** - Visual cues for different actions (🤖, 🧠, 💡, etc.)
+- **Improved help system** - Better organized with examples for both features
+
+### 🚀 Better User Experience
+- **Clearer command distinction** - Visual separation between `/ai` and `/ask`
+- **Enhanced prompts** - More informative and colorful terminal prompts
+- **Improved error messages** - Better feedback with emoji indicators
+- **Professional presentation** - Polished interface that's both functional and beautiful
 
 ## Contributing
 
