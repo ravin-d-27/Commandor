@@ -5,7 +5,6 @@ import shutil
 from pathlib import Path
 from typing import Optional, Tuple
 import google.generativeai as genai
-from decouple import config
 
 # Import readline for better terminal input handling
 try:
@@ -23,17 +22,7 @@ class AITerminal:
     """An intelligent terminal that uses AI to convert natural language to shell commands."""
     
     def __init__(self):
-        self.api_key = config("GEMINI")
-        self.current_dir = Path.cwd()
-        self.command_history = []
-        self.max_history = 100
-        self.system_info = self._get_system_info()
-        
-        # Configure Gemini
-        genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel("gemini-2.0-flash")
-        
-        # Colors for output
+        # Initialize colors first - this is critical!
         self.colors = {
             'red': '\033[91m',
             'green': '\033[92m',
@@ -52,8 +41,108 @@ class AITerminal:
             'bright_cyan': '\033[96m\033[1m'
         }
         
+        # Initialize other attributes
+        self.api_key = None
+        self.current_dir = Path.cwd()
+        self.command_history = []
+        self.max_history = 100
+        self.system_info = self._get_system_info()
+        self.config_dir = Path.home() / '.commandor'
+        self.env_file = self.config_dir / '.env'
+        self.model = None  # Initialize model as None
+        
+        # Ensure config directory exists
+        try:
+            self.config_dir.mkdir(exist_ok=True)
+        except Exception as e:
+            print(f"Warning: Could not create config directory: {e}")
+        
+        # Setup API key
+        self._setup_api_key()
+        
+        # Configure Gemini only if we have an API key
+        if self.api_key:
+            try:
+                genai.configure(api_key=self.api_key)
+                self.model = genai.GenerativeModel("gemini-2.0-flash")
+            except Exception as e:
+                print(f"Warning: Could not initialize Gemini model: {e}")
+                self.model = None
+        
         # Setup readline if available
         self._setup_readline()
+
+    def _setup_api_key(self):
+        """Setup Gemini API key with interactive prompt if needed."""
+        # Try to load from .env file first
+        if self.env_file.exists():
+            try:
+                with open(self.env_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith('GEMINI='):
+                            self.api_key = line.split('=', 1)[1].strip().strip('"\'')
+                            break
+            except Exception as e:
+                print(f"Warning: Could not read .env file: {e}")
+        
+        # If no API key found, prompt user
+        if not self.api_key:
+            self._prompt_for_api_key()
+
+    def _prompt_for_api_key(self):
+        """Prompt user for Gemini API key and save it."""
+        print(self._colorize('🔑 Gemini API Key Setup Required', 'bright_yellow'))
+        print(self._colorize('=' * 45, 'bright_blue'))
+        print("To use Commandor, you need a Gemini API key.")
+        print("You can get one free at: https://makersuite.google.com/app/apikey")
+        print()
+        
+        while True:
+            try:
+                api_key = input(self._colorize("Please enter your Gemini API key: ", 'bright_cyan')).strip()
+                
+                if not api_key:
+                    print(self._colorize("❌ API key cannot be empty. Please try again.", 'red'))
+                    continue
+                
+                # Test the API key
+                print(self._colorize("🔍 Validating API key...", 'yellow'))
+                
+                try:
+                    genai.configure(api_key=api_key)
+                    test_model = genai.GenerativeModel("gemini-2.0-flash")
+                    test_response = test_model.generate_content("Hello")
+                    
+                    if test_response:
+                        self.api_key = api_key
+                        self._save_api_key()
+                        print(self._colorize("✅ API key validated and saved successfully!", 'bright_green'))
+                        self.model = test_model
+                        break
+                    else:
+                        print(self._colorize("❌ Invalid API key. Please check and try again.", 'red'))
+                        
+                except Exception as e:
+                    print(self._colorize(f"❌ API key validation failed: {str(e)}", 'red'))
+                    print(self._colorize("Please check your API key and try again.", 'yellow'))
+                    
+            except KeyboardInterrupt:
+                print(f"\n{self._colorize('❌ Setup cancelled. Commandor requires an API key to function.', 'red')}")
+                exit(1)
+
+    def _save_api_key(self):
+        """Save API key to .env file."""
+        try:
+            with open(self.env_file, 'w') as f:
+                f.write(f'GEMINI={self.api_key}\n')
+            
+            # Set file permissions to be readable only by owner
+            if os.name != 'nt':  # Not Windows
+                os.chmod(self.env_file, 0o600)
+                
+        except Exception as e:
+            print(f"Warning: Could not save API key: {e}")
 
     def _get_system_info(self) -> dict:
         """Gather system information for better context."""
@@ -72,7 +161,7 @@ class AITerminal:
             return
         
         # Set up history file
-        history_file = Path.home() / '.ai_terminal_history'
+        history_file = self.config_dir / 'history'
         
         try:
             # Load existing history
@@ -95,14 +184,27 @@ class AITerminal:
             
             # Save history on exit
             import atexit
-            atexit.register(lambda: readline.write_history_file(str(history_file)))
+            atexit.register(lambda: self._save_history(history_file))
             
         except Exception as e:
             print(f"Warning: Could not setup readline: {e}")
 
+    def _save_history(self, history_file):
+        """Save command history to file."""
+        try:
+            readline.write_history_file(str(history_file))
+        except Exception as e:
+            print(f"Warning: Could not save history: {e}")
+
     def _colorize(self, text: str, color: str) -> str:
         """Apply color to text."""
-        return f"{self.colors.get(color, '')}{text}{self.colors['reset']}"
+        try:
+            if hasattr(self, 'colors') and self.colors:
+                return f"{self.colors.get(color, '')}{text}{self.colors['reset']}"
+            else:
+                return text
+        except Exception:
+            return text
 
     def _display_colorful_logo(self):
         """Display colorful Commandor logo."""
@@ -123,7 +225,6 @@ class AITerminal:
             files = []
             dirs = []
             
-            # Get first 10 items for context
             for item in sorted(self.current_dir.iterdir())[:10]:
                 if item.is_file():
                     files.append(item.name)
@@ -145,11 +246,14 @@ class AITerminal:
         if not self.command_history:
             return ""
         
-        recent = self.command_history[-3:]  # Last 3 commands
+        recent = self.command_history[-3:]
         return "Recent commands:\n" + "\n".join([f"  {cmd}" for cmd in recent]) + "\n"
 
     def get_ai_command(self, instruction: str) -> str:
         """Convert natural language instruction to shell command using AI."""
+        if not self.api_key or not self.model:
+            return "# Error: No API key configured or model not initialized"
+        
         context = self._get_directory_context()
         recent_commands = self._get_recent_commands()
         
@@ -182,7 +286,6 @@ class AITerminal:
             response = self.model.generate_content(prompt)
             command = response.text.strip()
             
-            # Remove code block markers if present
             if command.startswith('```'):
                 lines = command.split('\n')
                 command = '\n'.join(lines[1:-1]) if len(lines) > 2 else lines[1]
@@ -193,6 +296,9 @@ class AITerminal:
 
     def ask_ai(self, question: str) -> str:
         """Ask AI a general question (not command-related)."""
+        if not self.api_key or not self.model:
+            return "Error: No API key configured or model not initialized"
+        
         context = self._get_directory_context()
         
         prompt = f"""You are a helpful AI assistant. Answer the user's question clearly and concisely.
@@ -214,7 +320,6 @@ class AITerminal:
     def execute_command(self, command: str) -> Tuple[bool, str, str]:
         """Execute a shell command and return success status and output."""
         try:
-            # Handle cd commands specially to maintain directory state
             if command.strip().startswith('cd '):
                 return self._handle_cd_command(command)
             
@@ -224,7 +329,7 @@ class AITerminal:
                 cwd=str(self.current_dir),
                 capture_output=True,
                 text=True,
-                timeout=30  # 30 second timeout
+                timeout=30
             )
             
             success = result.returncode == 0
@@ -240,13 +345,11 @@ class AITerminal:
         parts = command.strip().split(maxsplit=1)
         
         if len(parts) == 1:
-            # cd with no arguments goes to home
             target = Path.home()
         else:
-            path = parts[1].strip('\'"')  # Remove quotes
+            path = parts[1].strip('\'"')
             target = Path(path)
             
-            # Handle relative paths
             if not target.is_absolute():
                 target = self.current_dir / target
         
@@ -276,11 +379,10 @@ class AITerminal:
         """Generate the terminal prompt."""
         dir_name = self.current_dir.name if self.current_dir.name else str(self.current_dir)
         
-        # Shorten long directory names
         if len(dir_name) > 20:
             dir_name = "..." + dir_name[-17:]
         
-        return f"{self._colorize('Commandor', 'bright_cyan')} {self._colorize('$', 'bright_yellow')} "
+        return f"{self._colorize('Commandor', 'bright_cyan')} {self._colorize('# ', 'bright_yellow')}"
 
     def show_help(self):
         """Display help information."""
@@ -295,6 +397,7 @@ class AITerminal:
         {self._colorize('/info', 'yellow')}             - Show system information
         {self._colorize('/history', 'yellow')}          - Show recent command history
         {self._colorize('/clear', 'yellow')}            - Clear the screen
+        {self._colorize('/config', 'yellow')}           - Show configuration info
         {self._colorize('exit', 'red')} or {self._colorize('Ctrl+C', 'red')}       - Exit the terminal
 
         {self._colorize('AI Command Examples:', 'bright_yellow')}
@@ -328,6 +431,18 @@ class AITerminal:
         """
         print(info_text)
 
+    def show_config(self):
+        """Display configuration information."""
+        config_text = f"""
+        {self._colorize('⚙️  Configuration', 'bold')}
+        {self._colorize('=' * 25, 'bright_blue')}
+        {self._colorize('Config Directory:', 'bright_cyan')} {self.config_dir}
+        {self._colorize('API Key Status:', 'bright_cyan')} {'✅ Configured' if self.api_key else '❌ Not configured'}
+        {self._colorize('Model Status:', 'bright_cyan')} {'✅ Initialized' if self.model else '❌ Not initialized'}
+        {self._colorize('Readline Support:', 'bright_cyan')} {'✅ Available' if READLINE_AVAILABLE else '❌ Not available'}
+        """
+        print(config_text)
+
     def show_history(self):
         """Display recent command history."""
         if not self.command_history:
@@ -341,12 +456,11 @@ class AITerminal:
 
     def add_to_history(self, command: str):
         """Add command to history."""
-        if command and command not in ['exit', '/help', '/info', '/history', '/clear']:
+        if command and command not in ['exit', '/help', '/info', '/history', '/clear', '/config']:
             self.command_history.append(command)
             if len(self.command_history) > self.max_history:
                 self.command_history.pop(0)
             
-            # Add to readline history if available
             if READLINE_AVAILABLE:
                 readline.add_history(command)
 
@@ -355,10 +469,14 @@ class AITerminal:
         try:
             return input(prompt).strip()
         except EOFError:
-            raise KeyboardInterrupt  # Treat EOF as exit signal
+            raise KeyboardInterrupt
 
     def run(self):
         """Main terminal loop."""
+        if not self.api_key or not self.model:
+            print(self._colorize("❌ Cannot start Commandor without API key or model initialization.", 'red'))
+            return
+        
         self._display_colorful_logo()
         
         if READLINE_AVAILABLE:
@@ -377,7 +495,6 @@ class AITerminal:
                 if not user_input:
                     continue
                 
-                # Handle special commands
                 if user_input == 'exit':
                     break
                 elif user_input == '/help':
@@ -386,6 +503,9 @@ class AITerminal:
                 elif user_input == '/info':
                     self.show_info()
                     continue
+                elif user_input == '/config':
+                    self.show_config()
+                    continue
                 elif user_input == '/history':
                     self.show_history()
                     continue
@@ -393,7 +513,6 @@ class AITerminal:
                     os.system('clear' if os.name != 'nt' else 'cls')
                     continue
                 
-                # Handle AI questions
                 elif user_input.startswith('/ask '):
                     question = user_input[5:].strip()
                     if not question:
@@ -409,7 +528,6 @@ class AITerminal:
                     self.add_to_history(f"/ask {question}")
                     continue
                 
-                # Handle AI commands
                 elif user_input.startswith('/ai '):
                     instruction = user_input[4:].strip()
                     if not instruction:
@@ -420,7 +538,6 @@ class AITerminal:
                     ai_command = self.get_ai_command(instruction)
                     print(f"{self._colorize('🤖 AI →', 'bright_green')} {self._colorize(ai_command, 'bright_blue')}")
                     
-                    # Ask for confirmation for potentially dangerous commands
                     dangerous_patterns = ['rm -rf', 'sudo rm', 'format', 'mkfs', '> /dev/', 'dd if=']
                     if any(pattern in ai_command.lower() for pattern in dangerous_patterns):
                         confirm = self.get_input(self._colorize("⚠️  This command looks dangerous. Execute? (y/N): ", 'bright_yellow'))
@@ -432,7 +549,6 @@ class AITerminal:
                     self.display_output(success, stdout, stderr)
                     self.add_to_history(f"/ai {instruction} → {ai_command}")
                 
-                # Handle regular shell commands
                 else:
                     success, stdout, stderr = self.execute_command(user_input)
                     self.display_output(success, stdout, stderr)
@@ -445,8 +561,20 @@ class AITerminal:
                 print(f"\n{self._colorize('👋 Goodbye! Thanks for using Commandor!', 'bright_green')}")
                 break
             except Exception as e:
-                print(self._colorize(f"💥 Unexpected error: {e}", 'red'))
+                print(f"💥 Unexpected error: {e}")
+                # Add some debugging info
+                import traceback
+                print(f"Error details: {traceback.format_exc()}")
+
+def main():
+    """Entry point for the commandor package."""
+    try:
+        terminal = AITerminal()
+        terminal.run()
+    except Exception as e:
+        print(f"❌ Error starting Commandor: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
-    terminal = AITerminal()
-    terminal.run()
+    main()
