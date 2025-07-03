@@ -6,7 +6,7 @@ An intelligent terminal assistant that uses AI to convert natural language to sh
 [![License](https://img.shields.io/badge/License-Open%20Source%20with%20Attribution-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.6%2B-blue.svg)](https://python.org)
 
-## ✨ Latest Features (v2.0)
+## ✨ Latest Features (v1.0.1)
 
 ### 🤖 **Direct AI Chat with `/ask`**
 Ask the AI assistant any question directly without generating commands! Perfect for:
