@@ -135,7 +135,7 @@ class AITerminal:
         
         QUESTION: "{question}"
 
-        Provide a comprehensive, well-structured answer with excellent markdown formatting."""
+        Provide a comprehensive, well-structured answer with excellent markdown formatting.""")
 
         try:
             response = self.model.generate_content(prompt)
