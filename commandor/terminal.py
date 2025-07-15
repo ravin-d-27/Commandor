@@ -107,7 +107,7 @@ class AITerminal:
         
         context = self._get_directory_context()
         
-        prompt = f"""You are a helpful AI assistant. Answer the user's question with rich markdown formatting.
+        prompt = textwrap.dedent(f"""You are a helpful AI assistant. Answer the user's question with rich markdown formatting.
 
         Use these markdown features extensively:
         - # Main headings and ## Subheadings
