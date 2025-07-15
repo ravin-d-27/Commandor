@@ -461,7 +461,7 @@ class AITerminal:
         if len(dir_display) > 30:
             dir_display = "..." + dir_display[-27:]
         
-        return f"\n{self._colorize('Commandor', 'bright_cyan')} {self._colorize(f'[{dir_display}]', 'bright_blue')} {self._colorize('# ', 'bright_yellow')}"
+        return f"{self._colorize('Commandor', 'bright_cyan')} {self._colorize(f'[{dir_display}]', 'bright_blue')} {self._colorize('# ', 'bright_yellow')}"
 
     def show_help(self):
         """Display help information."""
