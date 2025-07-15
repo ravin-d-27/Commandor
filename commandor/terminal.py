@@ -379,10 +379,18 @@ class AITerminal:
         """Generate the terminal prompt."""
         dir_name = self.current_dir.name if self.current_dir.name else str(self.current_dir)
         
-        if len(dir_name) > 20:
-            dir_name = "..." + dir_name[-17:]
+        # Create a shortened path similar to the screenshot
+        if len(str(self.current_dir)) > 30:
+            # Show pattern like [.../projects/Commandor]
+            parts = self.current_dir.parts
+            if len(parts) > 2:
+                dir_display = f"[.../{'/'.join(parts[-2:])}]"
+            else:
+                dir_display = f"[{dir_name}]"
+        else:
+            dir_display = f"[{self.current_dir}]"
         
-        return f"{self._colorize('Commandor', 'bright_cyan')} {self._colorize('# ', 'bright_yellow')}"
+        return f"{self._colorize('Commandor', 'bright_cyan')} {self._colorize(dir_display, 'blue')} {self._colorize('# ', 'bright_yellow')}"
 
     def show_help(self):
         """Display help information."""
@@ -519,7 +527,7 @@ class AITerminal:
                         print(self._colorize("❓ Please provide a question after /ask", 'yellow'))
                         continue
                     
-                    print(self._colorize("🤔 Thinking...", 'yellow'))
+                    print(self._colorize("🤔 Thinking...", 'yellow'), flush=True)
                     ai_response = self.ask_ai(question)
                     print(f"\n{self._colorize('🤖 AI Response:', 'bright_green')}")
                     print(f"{self._colorize('─' * 50, 'blue')}")
@@ -534,7 +542,7 @@ class AITerminal:
                         print(self._colorize("💡 Please provide an instruction after /ai", 'yellow'))
                         continue
                     
-                    print(self._colorize("🧠 Generating command...", 'yellow'))
+                    print(self._colorize("🧠 Generating command...", 'yellow'), flush=True)
                     ai_command = self.get_ai_command(instruction)
                     print(f"{self._colorize('🤖 AI →', 'bright_green')} {self._colorize(ai_command, 'bright_blue')}")
                     
