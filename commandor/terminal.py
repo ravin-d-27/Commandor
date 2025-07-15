@@ -701,7 +701,7 @@ class AITerminal:
                     # Add question to ask history before processing
                     self.add_to_ask_history(question)
                     
-                    print(self._colorize("🤔 Thinking...", 'yellow'))
+                    print(self._colorize("🤔 Thinking...", 'yellow'), flush=True)
                     ai_response = self.ask_ai(question)
                     
                     # Use the enhanced display instead of simple print
@@ -716,7 +716,7 @@ class AITerminal:
                         print(self._colorize("💡 Please provide an instruction after /ai", 'yellow'))
                         continue
                     
-                    print(self._colorize("🧠 Generating command...", 'yellow'))
+                    print(self._colorize("🧠 Generating command...", 'yellow'), flush=True)
                     ai_command = self.get_ai_command(instruction)
                     print(f"{self._colorize('🤖 AI →', 'bright_green')} {self._colorize(ai_command, 'bright_blue')}")
                     
