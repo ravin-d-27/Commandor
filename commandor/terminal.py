@@ -2,6 +2,7 @@ import os
 import subprocess
 import platform
 import shutil
+import textwrap
 from pathlib import Path
 from typing import Optional, Tuple
 import google.generativeai as genai
@@ -50,10 +51,13 @@ class AITerminal:
         self.api_key = None
         self.current_dir = Path.cwd()
         self.command_history = []
+        self.ask_history = []  # Dedicated history for /ask prompts
         self.max_history = 100
+        self.max_ask_history = 50  # Separate limit for ask history
         self.system_info = self._get_system_info()
         self.config_dir = Path.home() / '.commandor'
         self.env_file = self.config_dir / '.env'
+        self.ask_history_file = self.config_dir / 'ask_history.txt'
         self.model = None  # Initialize model as None
         
         # Initializing the Rich console
@@ -80,6 +84,8 @@ class AITerminal:
         # Setup readline if available
         self._setup_readline()
         
+        # Load ask history
+        self._load_ask_history()
         
     def _display_ai_response(self, response: str, title: str = "AI Response"):
         """Display AI response using rich library for better formatting."""
@@ -129,7 +135,7 @@ class AITerminal:
         
         QUESTION: "{question}"
 
-        Provide a comprehensive, well-structured answer with excellent markdown formatting."""
+        Provide a comprehensive, well-structured answer with excellent markdown formatting.""")
 
         try:
             response = self.model.generate_content(prompt)
@@ -264,6 +270,72 @@ class AITerminal:
             readline.write_history_file(str(history_file))
         except Exception as e:
             print(f"Warning: Could not save history: {e}")
+
+    def _load_ask_history(self):
+        """Load ask prompt history from file."""
+        try:
+            if self.ask_history_file.exists():
+                with open(self.ask_history_file, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            self.ask_history.append(line)
+        except Exception as e:
+            print(f"Warning: Could not load ask history: {e}")
+
+    def _save_ask_history(self):
+        """Save ask prompt history to file."""
+        try:
+            with open(self.ask_history_file, 'w', encoding='utf-8') as f:
+                for prompt in self.ask_history:
+                    f.write(f"{prompt}\n")
+        except Exception as e:
+            print(f"Warning: Could not save ask history: {e}")
+
+    def show_ask_history(self):
+        """Display ask prompt history."""
+        if not self.ask_history:
+            print(self._colorize("🤔 No ask history available", 'yellow'))
+            return
+        
+        print(self._colorize(f"📝 Ask History ({len(self.ask_history)} total):", 'bold'))
+        print(self._colorize('-' * 40, 'bright_magenta'))
+        for i, prompt in enumerate(self.ask_history[-15:], 1):
+            # Truncate long prompts for display
+            display_prompt = prompt if len(prompt) <= 60 else prompt[:57] + "..."
+            print(f"{self._colorize(f'{i:2d}.', 'bright_cyan')} {display_prompt}")
+        
+        if len(self.ask_history) > 15:
+            print(f"{self._colorize(f'... and {len(self.ask_history) - 15} more', 'yellow')}")
+        
+        print(f"\n{self._colorize('💡 Tip:', 'bright_yellow')} Use '/ask-search <term>' to search your ask history")
+    
+    def search_ask_history(self, search_term: str):
+        """Search ask history for a specific term."""
+        if not self.ask_history:
+            print(self._colorize("🤔 No ask history to search", 'yellow'))
+            return
+        
+        search_term_lower = search_term.lower()
+        matches = []
+        
+        for i, prompt in enumerate(self.ask_history):
+            if search_term_lower in prompt.lower():
+                matches.append((i + 1, prompt))
+        
+        if not matches:
+            print(self._colorize(f"🔍 No matches found for '{search_term}'", 'yellow'))
+            return
+        
+        print(self._colorize(f"🔍 Found {len(matches)} match(es) for '{search_term}':", 'bold'))
+        print(self._colorize('-' * 50, 'bright_green'))
+        for index, prompt in matches:
+            # Highlight the search term in the result
+            highlighted_prompt = prompt.replace(
+                search_term, 
+                self._colorize(search_term, 'bright_yellow')
+            )
+            print(f"{self._colorize(f'{index:2d}.', 'bright_cyan')} {highlighted_prompt}")
 
     def _colorize(self, text: str, color: str) -> str:
         """Apply color to text."""
@@ -475,6 +547,8 @@ class AITerminal:
         {self._colorize('/help', 'yellow')}             - Show this help message
         {self._colorize('/info', 'yellow')}             - Show system information
         {self._colorize('/history', 'yellow')}          - Show recent command history
+        {self._colorize('/ask-history', 'yellow')}      - Show your question history
+        {self._colorize('/ask-search <term>', 'yellow')} - Search your question history
         {self._colorize('/clear', 'yellow')}            - Clear the screen
         {self._colorize('/config', 'yellow')}           - Show configuration info
         {self._colorize('exit', 'red')} or {self._colorize('Ctrl+C', 'red')}       - Exit the terminal
@@ -491,6 +565,11 @@ class AITerminal:
         {self._colorize('/ask', 'bright_magenta')} How do I optimize my code for better performance?
         {self._colorize('/ask', 'bright_magenta')} Explain machine learning concepts
         {self._colorize('/ask', 'bright_magenta')} What are best practices for Git workflow?
+
+        {self._colorize('Ask History Examples:', 'bright_yellow')}
+        {self._colorize('/ask-history', 'yellow')}       - View your recent questions
+        {self._colorize('/ask-search python', 'yellow')} - Find questions about Python
+        {self._colorize('/ask-search debug', 'yellow')}  - Find debugging-related questions
 
         {self._colorize('💡 Regular shell commands work too!', 'bright_green')}
         """
@@ -535,13 +614,24 @@ class AITerminal:
 
     def add_to_history(self, command: str):
         """Add command to history."""
-        if command and command not in ['exit', '/help', '/info', '/history', '/clear', '/config']:
+        if command and command not in ['exit', '/help', '/info', '/history', '/clear', '/config', '/ask-history']:
             self.command_history.append(command)
             if len(self.command_history) > self.max_history:
                 self.command_history.pop(0)
             
             if READLINE_AVAILABLE:
                 readline.add_history(command)
+
+    def add_to_ask_history(self, prompt: str):
+        """Add ask prompt to ask history."""
+        if prompt and prompt.strip():
+            # Avoid duplicates if the same question was asked recently
+            if not self.ask_history or self.ask_history[-1] != prompt:
+                self.ask_history.append(prompt)
+                if len(self.ask_history) > self.max_ask_history:
+                    self.ask_history.pop(0)
+                # Save to file immediately for persistence
+                self._save_ask_history()
 
     def get_input(self, prompt: str) -> str:
         """Get user input with proper readline support."""
@@ -588,6 +678,16 @@ class AITerminal:
                 elif user_input == '/history':
                     self.show_history()
                     continue
+                elif user_input == '/ask-history':
+                    self.show_ask_history()
+                    continue
+                elif user_input.startswith('/ask-search '):
+                    search_term = user_input[12:].strip()
+                    if not search_term:
+                        print(self._colorize("🔍 Please provide a search term after /ask-search", 'yellow'))
+                        continue
+                    self.search_ask_history(search_term)
+                    continue
                 elif user_input == '/clear':
                     os.system('clear' if os.name != 'nt' else 'cls')
                     continue
@@ -597,6 +697,9 @@ class AITerminal:
                     if not question:
                         print(self._colorize("❓ Please provide a question after /ask", 'yellow'))
                         continue
+                    
+                    # Add question to ask history before processing
+                    self.add_to_ask_history(question)
                     
                     print(self._colorize("🤔 Thinking...", 'yellow'))
                     ai_response = self.ask_ai(question)
