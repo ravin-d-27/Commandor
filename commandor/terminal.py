@@ -6,6 +6,11 @@ from pathlib import Path
 from typing import Optional, Tuple
 import google.generativeai as genai
 
+# For Markdown Response Rendering
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
+
 # Import readline for better terminal input handling
 try:
     import readline
@@ -51,6 +56,9 @@ class AITerminal:
         self.env_file = self.config_dir / '.env'
         self.model = None  # Initialize model as None
         
+        # Initializing the Rich console
+        self.console = Console()
+        
         # Ensure config directory exists
         try:
             self.config_dir.mkdir(exist_ok=True)
@@ -71,6 +79,66 @@ class AITerminal:
         
         # Setup readline if available
         self._setup_readline()
+        
+        
+    def _display_ai_response(self, response: str, title: str = "AI Response"):
+        """Display AI response using rich library for better formatting."""
+        
+        # Create markdown object
+        markdown = Markdown(response)
+        
+        # Create a panel with the markdown content
+        panel = Panel(
+            markdown,
+            title=f"🤖 {title}",
+            subtitle="Powered by Gemini",
+            border_style="cyan",
+            padding=(1, 2),
+            expand=False
+        )
+        
+        self.console.print(panel)
+    
+    def ask_ai(self, question: str) -> str:
+        """Ask AI a general question (not command-related) - Enhanced for rich markdown."""
+        
+        if not self.api_key or not self.model:
+            return "Error: No API key configured or model not initialized"
+        
+        context = self._get_directory_context()
+        
+        prompt = f"""You are a helpful AI assistant. Answer the user's question with rich markdown formatting.
+
+        Use these markdown features extensively:
+        - # Main headings and ## Subheadings
+        - **Bold text** for key concepts
+        - *Italic text* for emphasis
+        - `inline code` for technical terms
+        - ```language
+          code blocks with syntax highlighting
+          ```
+        - > Blockquotes for important information
+        - - Bullet points for lists
+        - 1. Numbered lists for steps
+        - [Links](https://example.com) when relevant
+        - Tables when appropriate
+
+        SYSTEM CONTEXT (for reference only):
+        - OS: {self.system_info['os']}
+        - Current Directory: {self.current_dir}
+        
+        QUESTION: "{question}"
+
+        Provide a comprehensive, well-structured answer with excellent markdown formatting."""
+
+        try:
+            response = self.model.generate_content(prompt)
+            return response.text.strip()
+        except Exception as e:
+            return f"Sorry, I couldn't process your question: {e}"
+        
+        
+        
 
     def _setup_api_key(self):
         """Setup Gemini API key with interactive prompt if needed."""
@@ -91,6 +159,7 @@ class AITerminal:
             self._prompt_for_api_key()
 
     def _prompt_for_api_key(self):
+        
         """Prompt user for Gemini API key and save it."""
         print(self._colorize('🔑 Gemini API Key Setup Required', 'bright_yellow'))
         print(self._colorize('=' * 45, 'bright_blue'))
@@ -374,15 +443,25 @@ class AITerminal:
         
         if not success and not stderr:
             print(self._colorize("Command failed", 'red'))
+        
+        # Add newline after output to ensure prompt appears on new line
+        if stdout or stderr:
+            print()
 
     def get_prompt(self) -> str:
         """Generate the terminal prompt."""
-        dir_name = self.current_dir.name if self.current_dir.name else str(self.current_dir)
+   
+        # Show last 2 directories for better context
+        path_parts = self.current_dir.parts
+        if len(path_parts) > 2:
+            dir_display = f".../{'/'.join(path_parts[-2:])}"
+        else:
+            dir_display = str(self.current_dir)
         
-        if len(dir_name) > 20:
-            dir_name = "..." + dir_name[-17:]
+        if len(dir_display) > 30:
+            dir_display = "..." + dir_display[-27:]
         
-        return f"{self._colorize('Commandor', 'bright_cyan')} {self._colorize('# ', 'bright_yellow')}"
+        return f"\n{self._colorize('Commandor', 'bright_cyan')} {self._colorize(f'[{dir_display}]', 'bright_blue')} {self._colorize('# ', 'bright_yellow')}"
 
     def show_help(self):
         """Display help information."""
@@ -521,10 +600,10 @@ class AITerminal:
                     
                     print(self._colorize("🤔 Thinking...", 'yellow'))
                     ai_response = self.ask_ai(question)
-                    print(f"\n{self._colorize('🤖 AI Response:', 'bright_green')}")
-                    print(f"{self._colorize('─' * 50, 'blue')}")
-                    print(ai_response)
-                    print(f"{self._colorize('─' * 50, 'blue')}\n")
+                    
+                    # Use the enhanced display instead of simple print
+                    self._display_ai_response(ai_response, "AI Response")
+                    
                     self.add_to_history(f"/ask {question}")
                     continue
                 

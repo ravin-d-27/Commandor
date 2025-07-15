@@ -23,6 +23,7 @@ setup(
         "python-decouple>=3.6",
         "pyreadline3>=3.4.1; platform_system=='Windows'",
         "colorama>=0.4.4",  # For cross-platform colored output
+        "rich",
     ],
     entry_points={
         "console_scripts": [
