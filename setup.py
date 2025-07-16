@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="commandor-ai",
-    version="1.0.1",
+    version="1.0.2",
     description="An intelligent terminal assistant that uses AI to convert natural language to shell commands",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -23,6 +23,7 @@ setup(
         "python-decouple>=3.6",
         "pyreadline3>=3.4.1; platform_system=='Windows'",
         "colorama>=0.4.4",  # For cross-platform colored output
+        "rich>=10.0.0,<14.0.0",
     ],
     entry_points={
         "console_scripts": [

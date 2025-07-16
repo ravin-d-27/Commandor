@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "commandor-ai"
+version = "1.0.2"
+description = "An intelligent terminal assistant that uses AI to convert natural language to shell commands"
+readme = "README.md"
+requires-python = ">=3.7"
+license = { text = "Proprietary" }  # Adjust if you later use an OSI-approved license
+
+authors = [
+  { name = "Ravin D", email = "ravin.d3107@outlook.com" }
+]
+
+keywords = [
+  "terminal", "ai", "shell", "command-line", "natural-language",
+  "gemini", "assistant", "automation", "cli", "productivity"
+]
+
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: System Administrators",
+  "License :: Free for non-commercial use",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.7",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Topic :: System :: Shells",
+  "Topic :: System :: System Shells",
+  "Topic :: Terminals",
+  "Topic :: Utilities"
+]
+
+dependencies = [
+  "google-generativeai>=0.3.0",
+  "python-decouple>=3.6",
+  "colorama>=0.4.4"
+]
+
+[project.optional-dependencies]
+windows = [
+  "pyreadline3>=3.4.1"
+]
+
+[project.urls]
+Homepage = "https://github.com/ravin-d-27/Commandor"
+BugReports = "https://github.com/ravin-d-27/Commandor/issues"
+Source = "https://github.com/ravin-d-27/Commandor"
+Documentation = "https://github.com/ravin-d-27/Commandor#readme"
+
+[project.scripts]
+commandor = "commandor.main:main"

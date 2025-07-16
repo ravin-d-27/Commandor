@@ -1,0 +1,12 @@
+# Include the README and LICENSE files
+include README.md
+include LICENSE
+
+# Include all files inside the commandor package that aren't .py
+recursive-include commandor *
+
+# Exclude unnecessary files (optional but good practice)
+global-exclude *.pyc __pycache__ *.pyo *.pyd *.swp *.bak
+
+# Include any other data files, e.g., configs/templates if you have them
+# recursive-include commandor/templates *
