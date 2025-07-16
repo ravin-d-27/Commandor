@@ -105,7 +105,46 @@ class AITerminal:
         )
         
         self.console.print(panel)
-    
+
+    def reset_api_key(self):
+        """Reset and reconfigure the API key."""
+        print(self._colorize("🔄 Resetting API key...", 'yellow'))
+        self.api_key = None
+        self.model = None
+        self._prompt_for_api_key()
+
+    def test_api_key(self) -> bool:
+        """Test if the current API key is valid."""
+        if not self.api_key:
+            print(self._colorize("❌ No API key configured", 'red'))
+            return False
+        
+        try:
+            print(self._colorize("🔍 Testing API key...", 'yellow'))
+            genai.configure(api_key=self.api_key)
+            test_model = genai.GenerativeModel("gemini-2.0-flash")
+            test_response = test_model.generate_content("Hello")
+            return test_response is not None
+        except Exception as e:
+            print(self._colorize(f"❌ API key test failed: {str(e)}", 'red'))
+            return False
+
+    def handle_api_error(self, error_message: str) -> bool:
+        """Handle API errors and offer to reset API key."""
+        print(self._colorize(f"❌ API Error: {error_message}", 'red'))
+        
+        # Check if it's likely an API key issue
+        api_error_keywords = ['api key', 'authentication', 'unauthorized', 'forbidden', 'invalid', 'quota', 'exceeded']
+        if any(keyword in error_message.lower() for keyword in api_error_keywords):
+            print(self._colorize("🔍 This looks like an API key issue.", 'yellow'))
+            
+            response = self.get_input(self._colorize("Would you like to reset your API key? (y/N): ", 'bright_cyan'))
+            if response.lower() == 'y':
+                self.reset_api_key()
+                return True
+        
+        return False
+
     def ask_ai(self, question: str) -> str:
         """Ask AI a general question (not command-related) - Enhanced for rich markdown."""
         
@@ -142,10 +181,11 @@ class AITerminal:
             response = self.model.generate_content(prompt)
             return response.text.strip()
         except Exception as e:
-            return f"Sorry, I couldn't process your question: {e}"
-        
-        
-        
+            error_msg = str(e)
+            if self.handle_api_error(error_msg):
+                # API key was reset, try again
+                return self.ask_ai(question)
+            return f"Sorry, I couldn't process your question: {error_msg}"
 
     def _setup_api_key(self):
         """Setup Gemini API key with interactive prompt if needed."""
@@ -166,7 +206,6 @@ class AITerminal:
             self._prompt_for_api_key()
 
     def _prompt_for_api_key(self):
-        
         """Prompt user for Gemini API key and save it."""
         print(self._colorize('🔑 Gemini API Key Setup Required', 'bright_yellow'))
         print(self._colorize('=' * 45, 'bright_blue'))
@@ -438,30 +477,11 @@ class AITerminal:
             
             return command.strip()
         except Exception as e:
-            return f"# Error getting AI response: {e}"
-
-    def ask_ai(self, question: str) -> str:
-        """Ask AI a general question (not command-related)."""
-        if not self.api_key or not self.model:
-            return "Error: No API key configured or model not initialized"
-        
-        context = self._get_directory_context()
-        
-        prompt = f"""You are a helpful AI assistant. Answer the user's question clearly and concisely.
-
-        SYSTEM CONTEXT (for reference only):
-        - OS: {self.system_info['os']}
-        - Current Directory: {self.current_dir}
-        
-        QUESTION: "{question}"
-
-        Please provide a helpful and informative answer. If the question is about system administration, programming, or technical topics, provide practical advice. Keep responses concise but comprehensive."""
-
-        try:
-            response = self.model.generate_content(prompt)
-            return response.text.strip()
-        except Exception as e:
-            return f"Sorry, I couldn't process your question: {e}"
+            error_msg = str(e)
+            if self.handle_api_error(error_msg):
+                # API key was reset, try again
+                return self.get_ai_command(instruction)
+            return f"# Error getting AI response: {error_msg}"
 
     def execute_command(self, command: str) -> Tuple[bool, str, str]:
         """Execute a shell command and return success status and output."""
@@ -527,7 +547,6 @@ class AITerminal:
 
     def get_prompt(self) -> str:
         """Generate the terminal prompt."""
-   
         # Show last 2 directories for better context
         path_parts = self.current_dir.parts
         if len(path_parts) > 2:
@@ -556,6 +575,8 @@ class AITerminal:
         {self._colorize('/ask-search <term>', 'yellow')} - Search your question history
         {self._colorize('/clear', 'yellow')}            - Clear the screen
         {self._colorize('/config', 'yellow')}           - Show configuration info
+        {self._colorize('/reset-api', 'yellow')}        - Reset and reconfigure API key
+        {self._colorize('/test-api', 'yellow')}         - Test current API key
         {self._colorize('exit', 'red')} or {self._colorize('Ctrl+C', 'red')}       - Exit the terminal
 
         {self._colorize('AI Command Examples:', 'bright_yellow')}
@@ -570,6 +591,10 @@ class AITerminal:
         {self._colorize('/ask', 'bright_magenta')} How do I optimize my code for better performance?
         {self._colorize('/ask', 'bright_magenta')} Explain machine learning concepts
         {self._colorize('/ask', 'bright_magenta')} What are best practices for Git workflow?
+
+        {self._colorize('API Management:', 'bright_yellow')}
+        {self._colorize('/reset-api', 'yellow')}         - Change your API key
+        {self._colorize('/test-api', 'yellow')}          - Verify API key is working
 
         {self._colorize('Ask History Examples:', 'bright_yellow')}
         {self._colorize('/ask-history', 'yellow')}       - View your recent questions
@@ -603,6 +628,8 @@ class AITerminal:
         {self._colorize('API Key Status:', 'bright_cyan')} {'✅ Configured' if self.api_key else '❌ Not configured'}
         {self._colorize('Model Status:', 'bright_cyan')} {'✅ Initialized' if self.model else '❌ Not initialized'}
         {self._colorize('Readline Support:', 'bright_cyan')} {'✅ Available' if READLINE_AVAILABLE else '❌ Not available'}
+        {self._colorize('API Key File:', 'bright_cyan')} {self.env_file}
+        {self._colorize('Ask History File:', 'bright_cyan')} {self.ask_history_file}
         """
         print(config_text)
 
@@ -619,7 +646,7 @@ class AITerminal:
 
     def add_to_history(self, command: str):
         """Add command to history."""
-        if command and command not in ['exit', '/help', '/info', '/history', '/clear', '/config', '/ask-history']:
+        if command and command not in ['exit', '/help', '/info', '/history', '/clear', '/config', '/ask-history', '/reset-api', '/test-api']:
             self.command_history.append(command)
             if len(self.command_history) > self.max_history:
                 self.command_history.pop(0)
@@ -646,7 +673,7 @@ class AITerminal:
             return user_input
         except EOFError:
             raise KeyboardInterrupt
-
+        
     def run(self):
         """Main terminal loop."""
         if not self.api_key or not self.model:
@@ -698,11 +725,25 @@ class AITerminal:
                 elif user_input == '/clear':
                     os.system('clear' if os.name != 'nt' else 'cls')
                     continue
+                elif user_input == '/reset-api':
+                    self.reset_api_key()
+                    continue
+                elif user_input == '/test-api':
+                    if self.test_api_key():
+                        print(self._colorize("✅ API key is working correctly!", 'bright_green'))
+                    else:
+                        print(self._colorize("❌ API key test failed", 'red'))
+                    continue
                 
                 elif user_input.startswith('/ask '):
                     question = user_input[5:].strip()
                     if not question:
                         print(self._colorize("❓ Please provide a question after /ask", 'yellow'))
+                        continue
+                    
+                    # Check if API key and model are still valid
+                    if not self.api_key or not self.model:
+                        print(self._colorize("❌ API key or model not available. Use /reset-api to reconfigure.", 'red'))
                         continue
                     
                     # Add question to ask history before processing
@@ -711,8 +752,12 @@ class AITerminal:
                     print(self._colorize("🤔 Thinking...", 'yellow'), flush=True)
                     ai_response = self.ask_ai(question)
                     
-                    # Use the enhanced display instead of simple print
-                    self._display_ai_response(ai_response, "AI Response")
+                    # Check if there was an API error that couldn't be resolved
+                    if ai_response.startswith("Error:") or ai_response.startswith("Sorry,"):
+                        print(self._colorize(ai_response, 'red'))
+                    else:
+                        # Use the enhanced display instead of simple print
+                        self._display_ai_response(ai_response, "AI Response")
                     
                     self.add_to_history(f"/ask {question}")
                     continue
@@ -723,10 +768,22 @@ class AITerminal:
                         print(self._colorize("💡 Please provide an instruction after /ai", 'yellow'))
                         continue
                     
+                    # Check if API key and model are still valid
+                    if not self.api_key or not self.model:
+                        print(self._colorize("❌ API key or model not available. Use /reset-api to reconfigure.", 'red'))
+                        continue
+                    
                     print(self._colorize("🧠 Generating command...", 'yellow'), flush=True)
                     ai_command = self.get_ai_command(instruction)
+                    
+                    # Check if there was an API error
+                    if ai_command.startswith("# Error"):
+                        print(self._colorize(ai_command, 'red'))
+                        continue
+                    
                     print(f"{self._colorize('🤖 AI →', 'bright_green')} {self._colorize(ai_command, 'bright_blue')}")
                     
+                    # Safety check for dangerous commands
                     dangerous_patterns = ['rm -rf', 'sudo rm', 'format', 'mkfs', '> /dev/', 'dd if=']
                     if any(pattern in ai_command.lower() for pattern in dangerous_patterns):
                         confirm = self.get_input(self._colorize("⚠️  This command looks dangerous. Execute? (y/N): ", 'bright_yellow'))
@@ -739,6 +796,7 @@ class AITerminal:
                     self.add_to_history(f"/ai {instruction} → {ai_command}")
                 
                 else:
+                    # Regular shell command
                     success, stdout, stderr = self.execute_command(user_input)
                     self.display_output(success, stdout, stderr)
                     self.add_to_history(user_input)
@@ -754,16 +812,8 @@ class AITerminal:
                 # Add some debugging info
                 import traceback
                 print(f"Error details: {traceback.format_exc()}")
-
-def main():
-    """Entry point for the commandor package."""
-    try:
-        terminal = AITerminal()
-        terminal.run()
-    except Exception as e:
-        print(f"❌ Error starting Commandor: {e}")
-        import traceback
-        traceback.print_exc()
-
-if __name__ == "__main__":
-    main()
+                # Offer to reset API if it might be an API-related error
+                if "api" in str(e).lower() or "model" in str(e).lower():
+                    response = self.get_input(self._colorize("This might be an API issue. Reset API key? (y/N): ", 'bright_cyan'))
+                    if response.lower() == 'y':
+                        self.reset_api_key()
