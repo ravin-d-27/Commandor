@@ -1,4 +1,5 @@
 import os
+import sys
 import subprocess
 import platform
 import shutil
@@ -252,6 +253,10 @@ class AITerminal:
             
             # Enable vi or emacs mode (emacs is default)
             readline.parse_and_bind("set editing-mode emacs")
+            
+            # Configure better line wrapping behavior
+            readline.parse_and_bind("set horizontal-scroll-mode off")
+            readline.parse_and_bind("set disable-completion off")
             
             # Custom key bindings
             readline.parse_and_bind("\\C-p: previous-history")  # Ctrl+P for previous
@@ -516,9 +521,9 @@ class AITerminal:
         if not success and not stderr:
             print(self._colorize("Command failed", 'red'))
         
-        # Add newline after output to ensure prompt appears on new line
-        if stdout or stderr:
-            print()
+        # Always add newline after any command output to ensure prompt appears on new line
+        # This prevents text overlapping issues when the next prompt is displayed
+        print()
 
     def get_prompt(self) -> str:
         """Generate the terminal prompt."""
@@ -634,9 +639,11 @@ class AITerminal:
                 self._save_ask_history()
 
     def get_input(self, prompt: str) -> str:
-        """Get user input with proper readline support."""
+        """Get user input with proper readline support and line wrapping prevention."""
         try:
-            return input(prompt).strip()
+            # Get input normally - the real fix is ensuring clean line termination elsewhere
+            user_input = input(prompt).strip()
+            return user_input
         except EOFError:
             raise KeyboardInterrupt
 
