@@ -4,8 +4,8 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="Commandor",
-    version="1.0.0",
+    name="commandor-ai",
+    version="1.0.1",
     description="An intelligent terminal assistant that uses AI to convert natural language to shell commands",
     long_description=long_description,
     long_description_content_type="text/markdown",
