@@ -134,7 +134,7 @@ class AITerminal:
         print(self._colorize(f"❌ API Error: {error_message}", 'red'))
         
         # Check if it's likely an API key issue
-        api_error_keywords = ['api key', 'authentication', 'unauthorized', 'forbidden', 'invalid', 'quota', 'exceeded']
+        api_error_keywords = ['api key', 'authentication', 'unauthorized', 'forbidden', 'quota', 'exceeded']
         if any(keyword in error_message.lower() for keyword in api_error_keywords):
             print(self._colorize("🔍 This looks like an API key issue.", 'yellow'))
             
