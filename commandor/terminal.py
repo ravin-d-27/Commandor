@@ -575,8 +575,6 @@ class AITerminal:
         {self._colorize('/ask-search <term>', 'yellow')} - Search your question history
         {self._colorize('/clear', 'yellow')}            - Clear the screen
         {self._colorize('/config', 'yellow')}           - Show configuration info
-        {self._colorize('/reset-api', 'yellow')}        - Reset and reconfigure API key
-        {self._colorize('/test-api', 'yellow')}         - Test current API key
         {self._colorize('exit', 'red')} or {self._colorize('Ctrl+C', 'red')}       - Exit the terminal
 
         {self._colorize('AI Command Examples:', 'bright_yellow')}
