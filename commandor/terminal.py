@@ -184,7 +184,7 @@ class AITerminal:
             error_msg = str(e)
             if self.handle_api_error(error_msg):
                 # API key was reset, try again
-                return self.ask_ai(question)
+                return self.ask_ai(question, max_retries, retry_count + 1)
             return f"Sorry, I couldn't process your question: {error_msg}"
 
     def _setup_api_key(self):
