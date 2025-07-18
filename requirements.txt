@@ -3,5 +3,5 @@ google-generativeai>=0.3.0
 python-decouple>=3.6
 pyreadline3>=3.4.1; platform_system=="Windows"
 python-decouple
-colorama>=0.4.4
 rich>=10.0.0
+colorama>=0.4.4

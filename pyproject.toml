@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "commandor-ai"
-version = "1.0.2"
+version = "0.0.1"
 description = "An intelligent terminal assistant that uses AI to convert natural language to shell commands"
 readme = "README.md"
 requires-python = ">=3.7"
@@ -42,7 +42,8 @@ classifiers = [
 dependencies = [
   "google-generativeai>=0.3.0",
   "python-decouple>=3.6",
-  "colorama>=0.4.4"
+  "colorama>=0.4.4",
+  "rich>=10.0.0",
 ]
 
 [project.optional-dependencies]
