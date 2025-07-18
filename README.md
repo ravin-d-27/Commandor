@@ -1,4 +1,4 @@
-# 🚀 Commandor
+# Commandor
 
 An intelligent terminal assistant that uses AI to **convert natural language into shell commands** and now **answers questions directly** with `/ask`.  
 Bring the power of AI to your terminal and work smarter!
@@ -9,30 +9,22 @@ Bring the power of AI to your terminal and work smarter!
 
 ---
 
-## ✨ What’s New in v1.0.2
 
-- ✅ **Improved Help Command:** Better organized, clearer instructions
-- 🐛 **Bug Fixes:** Minor fixes in `/ask` command parsing & response formatting
-- 🔧 **Code Cleanup:** Refactored terminal loop for clarity
-- 📚 **Documentation:** Updated README & help text to reflect new usage
+## Key Features
 
----
-
-## 🌟 Key Features
-
-- 🧠 **/ai** – Convert natural language instructions to shell commands
-- 💡 **/ask** – Ask AI anything: get explanations, coding help, system tips & more
-- 🌈 **Beautiful interface** – Colorful ASCII art, emoji cues, color-coded prompts
-- 📍 **Context-aware** – Commands tailored to your current directory
-- 🛡️ **Safety checks** – Warn before running dangerous commands
-- 📚 **Command history** – Navigate with arrow keys (readline support)
-- 🖥️ **Cross-platform** – Works on Linux, macOS & Windows
+- **/ai** – Convert natural language instructions to shell commands
+- **/ask** – Ask AI anything: get explanations, coding help, system tips & more
+- **Beautiful interface** – Colorful ASCII art, emoji cues, color-coded prompts
+- **Context-aware** – Commands tailored to your current directory
+- **Safety checks** – Warn before running dangerous commands
+- **Command history** – Navigate with arrow keys (readline support)
+- **Cross-platform** – Works on Linux, macOS & Windows
 
 ---
 
-## 📦 Installation
+## Installation
 
-### 🔧 Clone & install (recommended)
+### Clone & install (recommended)
 
 ```bash
 git clone https://github.com/ravin-d-27/Commandor.git
@@ -40,7 +32,7 @@ cd Commandor
 pip install -e .
 ````
 
-### 🔑 Set up your API key
+### Set up your API key
 
 Get your Gemini API key from [Google AI Studio](https://makersuite.google.com/app/apikey):
 
@@ -54,11 +46,11 @@ Or set it directly:
 export GEMINI=your_api_key_here
 ```
 
-> ✅ **Windows tip:** Use `set GEMINI=your_api_key_here` instead
+> **Windows tip:** Use `set GEMINI=your_api_key_here` instead
 
 ---
 
-## 🚀 Usage
+## Usage
 
 Run from any terminal:
 
@@ -82,7 +74,7 @@ commandor
 
 ---
 
-## 🧪 Examples
+## Examples
 
 ```bash
 Commandor $ /ai list all .py files
@@ -99,15 +91,15 @@ A virtual environment isolates your Python packages ...
 
 ---
 
-## 🎨 Beautiful UI
+## Beautiful UI
 
-* 🌈 Rainbow-colored ASCII logo on start
+* Rainbow-colored ASCII logo on start
 * 🤖 & 💡 emojis for quick visual cues
 * Clear, color-coded prompts to separate AI and user input
 
 ---
 
-## 🛠 Troubleshooting
+## Troubleshooting
 
 ✅ Command not found?
 
@@ -140,7 +132,7 @@ We love contributions!
 
 ---
 
-## 📜 License
+## License
 
 Open Source, free to use personally & commercially (with attribution):
 
@@ -150,25 +142,24 @@ Open Source, free to use personally & commercially (with attribution):
 
 ---
 
-## ✏️ Author & Contact
+## ✏Author & Contact
 
 Made with ❤️ by **Ravin D**
 
-* 📧 Email: [ravin.d3107@outlook.com](mailto:ravin.d3107@outlook.com)
-* 💬 [GitHub Discussions](https://github.com/ravin-d-27/Commandor/discussions)
+* Email: [ravin.d3107@outlook.com](mailto:ravin.d3107@outlook.com)
 
 ---
 
-## 🌟 Show your support
+## Show your support
 
 If you find Commandor helpful:
 
-* ⭐ Star this repository!
+* Star this repository!
 * Share with fellow developers!
 
 ---
 
-## 🏁 Uninstall
+## Uninstall
 
 ```bash
 pip uninstall commandor
