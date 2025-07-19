@@ -1,30 +1,32 @@
 # Commandor
 
-An intelligent terminal assistant that uses AI to **convert natural language into shell commands** and now **answers questions directly** with `/ask`.  
-Bring the power of AI to your terminal and work smarter!
+Commandor is an intelligent terminal assistant that uses AI to convert natural language into shell commands and now answers questions directly with `/ask`.  
+It brings the power of generative AI to your terminal to improve productivity, reduce mental load, and streamline development workflows.
 
 [![GitHub stars](https://img.shields.io/github/stars/ravin-d-27/Commandor?style=social)](https://github.com/ravin-d-27/Commandor/stargazers)
 [![License](https://img.shields.io/badge/License-Open%20Source%20with%20Attribution-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.6%2B-blue.svg)](https://python.org)
 
----
+**Docker Image:**  
+Available at [https://hub.docker.com/r/ravind2704/commandor](https://hub.docker.com/r/ravind2704/commandor)
 
+---
 
 ## Key Features
 
-- **/ai** – Convert natural language instructions to shell commands
-- **/ask** – Ask AI anything: get explanations, coding help, system tips & more
-- **Beautiful interface** – Colorful ASCII art, emoji cues, color-coded prompts
-- **Context-aware** – Commands tailored to your current directory
-- **Safety checks** – Warn before running dangerous commands
-- **Command history** – Navigate with arrow keys (readline support)
-- **Cross-platform** – Works on Linux, macOS & Windows
+- `/ai` – Convert natural language instructions into shell commands
+- `/ask` – Ask AI questions about programming, systems, tools, and general knowledge
+- Color-coded terminal interface with clear separation of user and AI input
+- Context-aware suggestions based on current working directory
+- Safety checks before executing potentially destructive commands
+- Command history navigation with arrow keys
+- Cross-platform support: Linux, macOS, and Windows
 
 ---
 
 ## Installation
 
-### Clone & install (recommended)
+### Clone and install (recommended)
 
 ```bash
 git clone https://github.com/ravin-d-27/Commandor.git
@@ -34,25 +36,31 @@ pip install -e .
 
 ### Set up your API key
 
-Get your Gemini API key from [Google AI Studio](https://makersuite.google.com/app/apikey):
+Obtain your Gemini API key from [Google AI Studio](https://makersuite.google.com/app/apikey)
+
+---
+
+## Docker Usage
+
+Commandor is also available as a Docker image:
+
+### Pull the image
 
 ```bash
-echo "GEMINI=your_api_key_here" > ~/.env
+docker pull ravind2704/commandor
 ```
 
-Or set it directly:
+### Run the Docker Image
 
 ```bash
-export GEMINI=your_api_key_here
+docker run -it ravind2704/commandor
 ```
-
-> **Windows tip:** Use `set GEMINI=your_api_key_here` instead
 
 ---
 
 ## Usage
 
-Run from any terminal:
+Run Commandor from your terminal:
 
 ```bash
 commandor
@@ -60,58 +68,46 @@ commandor
 
 ---
 
-## 🛠️ Available Commands
+## Available Commands
 
-|             Command |                                              What it does |
-| ------------------: | --------------------------------------------------------: |
-| `/ai <instruction>` |                 Convert natural language to shell command |
-|   `/ask <question>` | Ask AI anything (coding, concepts, tips, general queries) |
-|             `/help` |                                         Show help message |
-|             `/info` |                                    Show basic system info |
-|          `/history` |                              View past generated commands |
-|            `/clear` |                                     Clear terminal screen |
-|   `exit` / `Ctrl+C` |                                            Exit Commandor |
+| Command             | Description                                                  |
+| ------------------- | ------------------------------------------------------------ |
+| `/ai <instruction>` | Converts a natural language instruction into a shell command |
+| `/ask <question>`   | Asks AI a general or technical question                      |
+| `/help`             | Shows usage information and supported commands               |
+| `/info`             | Displays basic system information                            |
+| `/history`          | Shows the history of AI-generated commands                   |
+| `/clear`            | Clears the terminal screen                                   |
+| `exit` or `Ctrl+C`  | Exits Commandor                                              |
 
 ---
 
 ## Examples
 
 ```bash
-Commandor $ /ai list all .py files
-🤖 AI → find . -name "*.py" -type f
+/ai list all .py files
+# Output: find . -name "*.py" -type f
 
-Commandor $ /ask What is a virtual environment in Python?
-🤔 Thinking...
-
-🤖 AI Response:
-────────────────────────────────────────────
-A virtual environment isolates your Python packages ...
-────────────────────────────────────────────
+/ask What is a virtual environment in Python?
+# Output: Detailed explanation generated by AI
 ```
-
----
-
-## Beautiful UI
-
-* Rainbow-colored ASCII logo on start
-* 🤖 & 💡 emojis for quick visual cues
-* Clear, color-coded prompts to separate AI and user input
 
 ---
 
 ## Troubleshooting
 
-✅ Command not found?
+**Command not found**
 
-* Ensure it’s installed: `pip show commandor`
-* Check your PATH: `echo $PATH`
+* Confirm installation with `pip show commandor`
+* Check your `$PATH` or activate your virtual environment
 
-✅ API key issues?
+**API Key errors**
 
-* Verify `.env` contains: `GEMINI=your_actual_key`
-* Key must be valid on [Google AI Studio](https://makersuite.google.com/app/apikey)
+* Ensure your `.env` contains a valid key: `GEMINI=your_key_here`
+* Verify your key at [Google AI Studio](https://makersuite.google.com/app/apikey)
+* You can also test the API by /test-api command in commandor
 
-✅ Windows users:
+**Windows users**
 
 ```bash
 pip install pyreadline3
@@ -119,43 +115,43 @@ pip install pyreadline3
 
 ---
 
-## 🤝 Contribute
+## Contribute
 
-We love contributions!
+We welcome contributions from developers, testers, and writers.
 
-* ⭐ Star the repo
-* 🐛 Report bugs / request features via [issues](https://github.com/ravin-d-27/Commandor/issues)
-* 📚 Improve docs
-* 🔧 Submit pull requests
-
-> Follow code style & add tests if you add features!
+* Star the repository
+* Report bugs and request features via GitHub Issues
+* Submit pull requests with meaningful improvements
+* Follow code conventions and include test cases for new features
 
 ---
 
 ## License
 
-Open Source, free to use personally & commercially (with attribution):
+Commandor is open-source and free to use with attribution.
 
-* Display **"Powered by Commandor"** if used commercially
-* Link back to this repo
-  See [LICENSE](LICENSE) for full details.
+* You must include the line: "Powered by Commandor" in commercial tools
+* You must provide a visible link back to the GitHub repository
+
+See [LICENSE](LICENSE) for full terms.
 
 ---
 
-## ✏Author & Contact
+## Author & Contact
 
-Made with ❤️ by **Ravin D**
+Created by **Ravin D**
 
+* GitHub: [https://github.com/ravin-d-27](https://github.com/ravin-d-27)
 * Email: [ravin.d3107@outlook.com](mailto:ravin.d3107@outlook.com)
 
 ---
 
-## Show your support
+## Show Your Support
 
-If you find Commandor helpful:
+If you find Commandor useful:
 
-* Star this repository!
-* Share with fellow developers!
+* Star the GitHub repository
+* Share it with others in your developer community
 
 ---
 
@@ -167,6 +163,6 @@ pip uninstall commandor
 
 ---
 
-**Happy coding! 🚀**
-
+**Version:** 0.0.1
+**Status:** Actively maintained
 
