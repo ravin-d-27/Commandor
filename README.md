@@ -10,6 +10,15 @@ It brings the power of generative AI to your terminal to improve productivity, r
 **Docker Image:**  
 Available at [https://hub.docker.com/r/ravind2704/commandor](https://hub.docker.com/r/ravind2704/commandor)
 
+
+# Hacktoberfest 2025 with Commandor
+
+<p align="center">
+<img src="assets/HF2025-EmailHeader.png">
+</p>
+
+Support open source software by participating in Hacktoberfest and get goodies and digital badges! 💙
+
 ---
 
 ## Key Features
