@@ -24,6 +24,7 @@ setup(
         "pyreadline3>=3.4.1; platform_system=='Windows'",
         "colorama>=0.4.4",  # For cross-platform colored output
         "rich>=10.0.0,<14.0.0",
+        "python-dotenv>=1.0.0",
     ],
     entry_points={
         "console_scripts": [

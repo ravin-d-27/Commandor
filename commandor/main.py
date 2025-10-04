@@ -1,3 +1,9 @@
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv() 
+
+
 #!/usr/bin/env python3
 """
 Commandor - An intelligent terminal assistant
