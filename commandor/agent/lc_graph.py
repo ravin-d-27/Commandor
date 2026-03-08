@@ -127,11 +127,16 @@ def build_agent_graph(
     llm: BaseChatModel,
     tools: list[BaseTool],
     system_prompt: str | None = None,
+    pre_model_hook=None,
 ) -> CompiledStateGraph:
     """Build a fully autonomous agent graph.
 
     The LLM will call tools automatically until the task is complete.
     No human interruption.
+
+    Args:
+        pre_model_hook: Optional ``RunnableLike`` called before every LLM
+            invocation (e.g. a context-summarization hook).
     """
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -140,6 +145,7 @@ def build_agent_graph(
             tools=tools,
             prompt=system_prompt or SYSTEM_PROMPT,
             checkpointer=_checkpointer,
+            pre_model_hook=pre_model_hook,
         )
 
 
@@ -165,11 +171,16 @@ def build_assist_graph(
     llm: BaseChatModel,
     tools: list[BaseTool],
     system_prompt: str | None = None,
+    pre_model_hook=None,
 ) -> CompiledStateGraph:
     """Build a human-in-the-loop assist graph.
 
     The graph will pause (interrupt_before="tools") before every tool
     execution so the caller can inspect and approve/deny the planned actions.
+
+    Args:
+        pre_model_hook: Optional ``RunnableLike`` called before every LLM
+            invocation (e.g. a context-summarization hook).
     """
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -179,4 +190,5 @@ def build_assist_graph(
             prompt=system_prompt or SYSTEM_PROMPT,
             checkpointer=_checkpointer,
             interrupt_before=["tools"],
+            pre_model_hook=pre_model_hook,
         )

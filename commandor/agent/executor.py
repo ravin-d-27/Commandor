@@ -18,11 +18,8 @@ from typing import Optional
 
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from rich.console import Console
-from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.spinner import Spinner
-from rich.text import Text
 
 from ..config import get_api_key, get_config
 from ..providers.base import AgentResult
@@ -100,52 +97,128 @@ def _extract_final_answer(state: dict) -> str:
     return "Task completed."
 
 
-def _stream_graph(graph, input_data, config: dict) -> str:
-    """Stream graph events with Rich Live display.
+# ---------------------------------------------------------------------------
+# Context summarization
+# ---------------------------------------------------------------------------
 
-    Shows a spinner while waiting for the first token, then transitions to a
-    live-updating Rich panel rendering the growing Markdown response.  Tool
-    call announcements are printed inline above the live panel so they stay
-    visible after the panel updates.
+SUMMARIZE_THRESHOLD_TOKENS = 6000  # ~24 000 chars; leaves headroom before most model limits
+
+
+def _approx_tokens(messages: list) -> int:
+    """Rough token estimate: chars / 4 (no tokenizer dependency)."""
+    from langchain_core.messages import get_buffer_string  # noqa: PLC0415
+    return len(get_buffer_string(messages)) // 4
+
+
+def _make_summarize_hook(llm):
+    """Return a ``pre_model_hook`` that compresses history when context grows large.
+
+    The hook runs before every LLM call inside the graph.  When the approximate
+    token count exceeds ``SUMMARIZE_THRESHOLD_TOKENS`` it:
+
+    1. Keeps all ``SystemMessage`` entries untouched.
+    2. Keeps the last 4 non-system messages verbatim (preserves task continuity).
+    3. Asks the LLM to summarise everything in between into 2–3 paragraphs.
+    4. Replaces the middle messages with a single condensed ``HumanMessage``.
+
+    On any failure the hook returns ``{}`` (no-op) so the graph continues.
+    """
+    def _hook(state: dict) -> dict:
+        from langchain_core.messages import (  # noqa: PLC0415
+            HumanMessage,
+            SystemMessage,
+            get_buffer_string,
+        )
+
+        messages = state.get("messages", [])
+        if _approx_tokens(messages) < SUMMARIZE_THRESHOLD_TOKENS:
+            return {}  # nothing to do
+
+        system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
+        non_system  = [m for m in messages if not isinstance(m, SystemMessage)]
+
+        keep_recent  = non_system[-4:]   # always preserve the last 4 messages verbatim
+        to_summarize = non_system[:-4]
+        if not to_summarize:
+            return {}
+
+        history_text = get_buffer_string(to_summarize)
+        summary_prompt = (
+            "Summarize the following agent work session into 2-3 concise paragraphs. "
+            "Focus on: what files were read, what was discovered, and what actions were taken. "
+            "Be specific about file names and key findings. This summary will replace the "
+            "raw history to free up context space.\n\n"
+            f"History:\n{history_text[:12000]}"  # cap input to avoid recursive overflow
+        )
+        try:
+            response = llm.invoke([HumanMessage(content=summary_prompt)])
+            summary_text = (
+                response.content if hasattr(response, "content") else str(response)
+            )
+            condensed = HumanMessage(
+                content=f"[Context summary — history condensed to save space]\n{summary_text}"
+            )
+            new_messages = system_msgs + [condensed] + keep_recent
+            _rc.print("[dim cyan]  ↻ context condensed[/dim cyan]")
+            return {"messages": new_messages}
+        except Exception:
+            return {}  # on failure, do nothing — better to continue than crash
+
+    return _hook
+
+
+def _stream_graph(graph, input_data, config: dict) -> str:
+    """Stream graph events, printing tool call announcements and a final response panel.
+
+    Shows a spinner while waiting for the first token or tool call.  Tool call
+    announcements are printed via plain ``_rc.print()`` (no Live context) so no
+    ghost panel borders are left on screen.  All response tokens are accumulated
+    silently and rendered as a single ``Panel`` at the end.
 
     Returns the accumulated text from all ``AIMessageChunk.content`` strings.
     """
     accumulated = ""
     seen_call_ids: set[str] = set()
 
-    # Start with a spinner; once tokens arrive it switches to a Markdown panel.
-    spinner_text = Text("  thinking...", style="dim cyan")
-    spinner = Spinner("dots", text=spinner_text, style="cyan")
+    status = _rc.status("[dim cyan]  thinking...[/dim cyan]", spinner="dots")
+    status.start()
+    spinner_active = True
 
-    with Live(spinner, console=_rc, refresh_per_second=10, transient=False) as live:
+    def _stop_spinner() -> None:
+        nonlocal spinner_active
+        if spinner_active:
+            status.stop()
+            spinner_active = False
+
+    try:
         for chunk, _meta in graph.stream(input_data, config, stream_mode="messages"):
-            if isinstance(chunk, AIMessageChunk):
-                # -- Stream text tokens → grow the panel --
-                if isinstance(chunk.content, str) and chunk.content:
-                    accumulated += chunk.content
-                    live.update(
-                        Panel(
-                            Markdown(accumulated),
-                            border_style="cyan",
-                            padding=(0, 1),
-                        )
+            if not isinstance(chunk, AIMessageChunk):
+                continue
+
+            # -- Announce tool calls --
+            tcc = getattr(chunk, "tool_call_chunks", []) or []
+            for tc in tcc:
+                name = (tc.get("name") or "").strip()
+                call_id = (tc.get("id") or "").strip()
+                if name and call_id and call_id not in seen_call_ids:
+                    seen_call_ids.add(call_id)
+                    _stop_spinner()
+                    flag = " [bold red]⚠[/bold red] " if name in DANGEROUS_TOOL_NAMES else " "
+                    raw_args = tc.get("args") or ""
+                    args_preview = raw_args[:80] + "..." if len(str(raw_args)) > 80 else raw_args
+                    _rc.print(
+                        f"  [bold yellow]⚙[/bold yellow]{flag}[cyan]{name}[/cyan]  [dim]{args_preview}[/dim]"
                     )
 
-                # -- Announce tool calls inline (printed above the live panel) --
-                tcc = getattr(chunk, "tool_call_chunks", []) or []
-                for tc in tcc:
-                    name = (tc.get("name") or "").strip()
-                    call_id = (tc.get("id") or "").strip()
-                    if name and call_id and call_id not in seen_call_ids:
-                        seen_call_ids.add(call_id)
-                        flag = " [bold red]⚠[/bold red] " if name in DANGEROUS_TOOL_NAMES else " "
-                        raw_args = tc.get("args") or ""
-                        args_preview = (
-                            raw_args[:80] + "..." if len(str(raw_args)) > 80 else raw_args
-                        )
-                        live.console.print(
-                            f"  [bold yellow]⚙[/bold yellow]{flag}[cyan]{name}[/cyan]  [dim]{args_preview}[/dim]"
-                        )
+            # -- Accumulate text tokens silently --
+            if isinstance(chunk.content, str) and chunk.content:
+                _stop_spinner()
+                accumulated += chunk.content
+    finally:
+        _stop_spinner()
+
+    if accumulated:
+        _rc.print(Panel(Markdown(accumulated), border_style="cyan", padding=(0, 1)))
 
     return accumulated
 
@@ -156,7 +229,8 @@ def _stream_graph(graph, input_data, config: dict) -> str:
 
 def _run_agent(llm, task: str, system_prompt: str, config: dict, verbose: bool) -> AgentResult:
     """Fully autonomous agent run (streaming)."""
-    graph = build_agent_graph(llm, ALL_TOOLS, system_prompt)
+    hook = _make_summarize_hook(llm)
+    graph = build_agent_graph(llm, ALL_TOOLS, system_prompt, pre_model_hook=hook)
     _stream_graph(graph, {"messages": [HumanMessage(content=task)]}, config)
 
     state = graph.get_state(config)
@@ -187,7 +261,8 @@ def _run_assist(llm, task: str, system_prompt: str, config: dict, verbose: bool)
     approval (y/n/q).  Denied calls inject synthetic ToolMessages so the LLM
     can recover gracefully.
     """
-    graph = build_assist_graph(llm, ALL_TOOLS, system_prompt)
+    hook = _make_summarize_hook(llm)
+    graph = build_assist_graph(llm, ALL_TOOLS, system_prompt, pre_model_hook=hook)
 
     # Stream the initial segment — graph stops at interrupt_before="tools"
     _stream_graph(graph, {"messages": [HumanMessage(content=task)]}, config)
@@ -365,7 +440,8 @@ def _run_plan(llm, task: str, system_prompt: str, config: dict, verbose: bool) -
 
     _rc.print("\n  [plan] Executing approved plan...", style="dim")
     exec_config = {"configurable": {"thread_id": f"plan_exec_{uuid.uuid4()}"}}
-    agent_graph = build_agent_graph(llm, ALL_TOOLS, execution_prompt)
+    hook = _make_summarize_hook(llm)
+    agent_graph = build_agent_graph(llm, ALL_TOOLS, execution_prompt, pre_model_hook=hook)
     _stream_graph(
         agent_graph,
         {"messages": [HumanMessage(content=task)]},

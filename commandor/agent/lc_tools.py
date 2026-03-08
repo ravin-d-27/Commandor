@@ -25,7 +25,10 @@ def read_file_tool(path: str, limit: Optional[int] = None) -> str:
         path: Absolute or relative path to the file.
         limit: Optional maximum number of lines to return.
     """
-    return file_ops.read_file(path, limit)
+    try:
+        return file_ops.read_file(path, limit)
+    except (FileNotFoundError, ValueError, OSError) as e:
+        return f"Error: {e}"
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +49,10 @@ def write_file_tool(path: str, content: str) -> str:
     except (FileNotFoundError, OSError):
         old_content = ""
 
-    result = file_ops.write_file(path, content, create_dirs=True)
+    try:
+        result = file_ops.write_file(path, content, create_dirs=True)
+    except OSError as e:
+        return f"Error writing file: {e}"
     display_diff(path, old_content, content)
     return result
 
@@ -69,7 +75,10 @@ def edit_file_tool(path: str, old: str, new: str) -> str:
     except (FileNotFoundError, OSError):
         old_content = ""
 
-    result = file_ops.edit_file(path, old, new)
+    try:
+        result = file_ops.edit_file(path, old, new)
+    except (FileNotFoundError, ValueError, OSError) as e:
+        return f"Error: {e}"
 
     # Reread to get the actual new content (edit_file may normalise line endings etc.)
     try:
@@ -158,7 +167,10 @@ def glob_tool(pattern: str, path: str = ".") -> str:
         pattern: Glob pattern such as '**/*.py' or '*.ts'.
         path: Directory to search in (defaults to current directory).
     """
-    return file_ops.glob_files(pattern, path)
+    try:
+        return file_ops.glob_files(pattern, path)
+    except (FileNotFoundError, ValueError, OSError) as e:
+        return f"Error: {e}"
 
 
 @tool
@@ -170,7 +182,10 @@ def grep_tool(pattern: str, path: str = ".", file_pattern: str = "*") -> str:
         path: Directory to search in (defaults to current directory).
         file_pattern: Glob pattern to filter which files are searched (e.g. '*.py').
     """
-    return file_ops.search_in_files(pattern, path, file_pattern)
+    try:
+        return file_ops.search_in_files(pattern, path, file_pattern)
+    except (FileNotFoundError, ValueError, OSError) as e:
+        return f"Error: {e}"
 
 
 @tool
@@ -180,7 +195,10 @@ def list_directory_tool(path: str = ".") -> str:
     Args:
         path: Directory path to list (defaults to current directory).
     """
-    return file_ops.list_directory(path)
+    try:
+        return file_ops.list_directory(path)
+    except (FileNotFoundError, ValueError, OSError) as e:
+        return f"Error: {e}"
 
 
 @tool
