@@ -32,6 +32,7 @@ setup(
         "langchain-google-genai>=4.2.0",
         "langchain-anthropic>=1.3.0",
         "langchain-openai>=1.1.0",
+        "prompt_toolkit>=3.0.0",
     ],
     entry_points={
         "console_scripts": [

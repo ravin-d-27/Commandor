@@ -17,6 +17,12 @@ import uuid
 from typing import Optional
 
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
+from rich.console import Console
+from rich.live import Live
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.spinner import Spinner
+from rich.text import Text
 
 from ..config import get_api_key, get_config
 from ..providers.base import AgentResult
@@ -26,9 +32,12 @@ from .lc_graph import (
     build_agent_graph,
     build_assist_graph,
     build_chat_graph,
+    get_checkpointer,
 )
 from .lc_models import build_model
 from .lc_tools import ALL_TOOLS, DANGEROUS_TOOL_NAMES
+
+_rc = Console()
 
 
 # ---------------------------------------------------------------------------
@@ -92,48 +101,51 @@ def _extract_final_answer(state: dict) -> str:
 
 
 def _stream_graph(graph, input_data, config: dict) -> str:
-    """Stream graph events; print tokens live and announce tool activity.
+    """Stream graph events with Rich Live display.
 
-    Iterates ``graph.stream(..., stream_mode='messages')``.  For each event:
-
-    * ``AIMessageChunk`` with text content  → printed immediately (no newline)
-      so the response typewriter-scrolls to the terminal.
-    * ``AIMessageChunk`` with a new tool call → prints a ``⚙ tool_name [⚠️]``
-      activity line so the user can see what the agent is doing.
-    * ``ToolMessage``                        → tool already ran (diff display
-      was handled inside the tool itself); nothing extra to print here.
+    Shows a spinner while waiting for the first token, then transitions to a
+    live-updating Rich panel rendering the growing Markdown response.  Tool
+    call announcements are printed inline above the live panel so they stay
+    visible after the panel updates.
 
     Returns the accumulated text from all ``AIMessageChunk.content`` strings.
     """
     accumulated = ""
-    seen_call_ids: set[str] = set()  # deduplicate per tool-call id
+    seen_call_ids: set[str] = set()
 
-    for chunk, metadata in graph.stream(input_data, config, stream_mode="messages"):
-        if isinstance(chunk, AIMessageChunk):
-            # -- Stream text tokens --
-            if isinstance(chunk.content, str) and chunk.content:
-                print(chunk.content, end="", flush=True)
-                accumulated += chunk.content
+    # Start with a spinner; once tokens arrive it switches to a Markdown panel.
+    spinner_text = Text("  thinking...", style="dim cyan")
+    spinner = Spinner("dots", text=spinner_text, style="cyan")
 
-            # -- Announce tool calls (first chunk that names the call) --
-            tcc = getattr(chunk, "tool_call_chunks", []) or []
-            for tc in tcc:
-                name = (tc.get("name") or "").strip()
-                call_id = (tc.get("id") or "").strip()
-                if name and call_id and call_id not in seen_call_ids:
-                    seen_call_ids.add(call_id)
-                    flag = " ⚠️ " if name in DANGEROUS_TOOL_NAMES else " "
-                    raw_args = tc.get("args") or ""
-                    args_preview = (
-                        raw_args[:80] + "..." if len(str(raw_args)) > 80 else raw_args
+    with Live(spinner, console=_rc, refresh_per_second=10, transient=False) as live:
+        for chunk, _meta in graph.stream(input_data, config, stream_mode="messages"):
+            if isinstance(chunk, AIMessageChunk):
+                # -- Stream text tokens → grow the panel --
+                if isinstance(chunk.content, str) and chunk.content:
+                    accumulated += chunk.content
+                    live.update(
+                        Panel(
+                            Markdown(accumulated),
+                            border_style="cyan",
+                            padding=(0, 1),
+                        )
                     )
-                    print(f"\n  ⚙{flag}{name}  {args_preview}", flush=True)
 
-        # ToolMessage: diff was already printed inside the tool; nothing to do.
-
-    # Ensure cursor is on a fresh line after all tokens are flushed
-    if accumulated and not accumulated.endswith("\n"):
-        print()
+                # -- Announce tool calls inline (printed above the live panel) --
+                tcc = getattr(chunk, "tool_call_chunks", []) or []
+                for tc in tcc:
+                    name = (tc.get("name") or "").strip()
+                    call_id = (tc.get("id") or "").strip()
+                    if name and call_id and call_id not in seen_call_ids:
+                        seen_call_ids.add(call_id)
+                        flag = " [bold red]⚠[/bold red] " if name in DANGEROUS_TOOL_NAMES else " "
+                        raw_args = tc.get("args") or ""
+                        args_preview = (
+                            raw_args[:80] + "..." if len(str(raw_args)) > 80 else raw_args
+                        )
+                        live.console.print(
+                            f"  [bold yellow]⚙[/bold yellow]{flag}[cyan]{name}[/cyan]  [dim]{args_preview}[/dim]"
+                        )
 
     return accumulated
 
@@ -145,10 +157,6 @@ def _stream_graph(graph, input_data, config: dict) -> str:
 def _run_agent(llm, task: str, system_prompt: str, config: dict, verbose: bool) -> AgentResult:
     """Fully autonomous agent run (streaming)."""
     graph = build_agent_graph(llm, ALL_TOOLS, system_prompt)
-
-    if verbose:
-        print("  [agent] thinking...\n")
-
     _stream_graph(graph, {"messages": [HumanMessage(content=task)]}, config)
 
     state = graph.get_state(config)
@@ -162,10 +170,6 @@ def _run_agent(llm, task: str, system_prompt: str, config: dict, verbose: bool) 
 def _run_chat(llm, task: str, system_prompt: str, config: dict, verbose: bool) -> AgentResult:
     """Chat-only (no tools) run (streaming)."""
     graph = build_chat_graph(llm, system_prompt)
-
-    if verbose:
-        print("  [chat] thinking...\n")
-
     _stream_graph(graph, {"messages": [HumanMessage(content=task)]}, config)
 
     state = graph.get_state(config)
@@ -184,9 +188,6 @@ def _run_assist(llm, task: str, system_prompt: str, config: dict, verbose: bool)
     can recover gracefully.
     """
     graph = build_assist_graph(llm, ALL_TOOLS, system_prompt)
-
-    if verbose:
-        print("  [assist] thinking...\n")
 
     # Stream the initial segment — graph stops at interrupt_before="tools"
     _stream_graph(graph, {"messages": [HumanMessage(content=task)]}, config)
@@ -277,11 +278,8 @@ def _run_plan(llm, task: str, system_prompt: str, config: dict, verbose: bool) -
         "Approved Plan" context block.  A fresh agent graph runs the task
         with the full tool suite, streaming output as normal.
     """
-    from rich.console import Console  # noqa: PLC0415
     from rich.markdown import Markdown  # noqa: PLC0415
     from rich.panel import Panel  # noqa: PLC0415
-
-    _rc = Console()
 
     planning_prompt = system_prompt + PLANNING_SUFFIX
 
@@ -301,7 +299,7 @@ def _run_plan(llm, task: str, system_prompt: str, config: dict, verbose: bool) -
         return _extract_final_answer(state.values)
 
     if verbose:
-        print("  [plan] Generating plan...\n")
+        _rc.print("  [plan] Generating plan...", style="dim")
 
     plan_text = _generate_plan(task)
 
@@ -344,7 +342,7 @@ def _run_plan(llm, task: str, system_prompt: str, config: dict, verbose: bool) -
                     steps=[],
                 )
             if feedback:
-                print("\n  [plan] Revising plan...\n")
+                _rc.print("\n  [plan] Revising plan...", style="dim")
                 revision_context = (
                     f"Task: {task}\n\n"
                     f"Previous plan:\n{plan_text}\n\n"
@@ -365,7 +363,7 @@ def _run_plan(llm, task: str, system_prompt: str, config: dict, verbose: bool) -
         + "\n"
     )
 
-    print("\n  [plan] Executing approved plan...\n")
+    _rc.print("\n  [plan] Executing approved plan...", style="dim")
     exec_config = {"configurable": {"thread_id": f"plan_exec_{uuid.uuid4()}"}}
     agent_graph = build_agent_graph(llm, ALL_TOOLS, execution_prompt)
     _stream_graph(
@@ -449,6 +447,24 @@ def run_agent(
             )
 
     except Exception as e:
+        err_str = str(e)
+        # Bug 3: Corrupt checkpoint recovery — AIMessage with tool_calls but no
+        # corresponding ToolMessage.  Wipe the thread and retry once automatically.
+        if "INVALID_CHAT_HISTORY" in err_str and "tool_calls" in err_str:
+            try:
+                cp = get_checkpointer()
+                scoped_tid_local = f"{mode}_{thread_id}" if thread_id else None
+                if scoped_tid_local:
+                    cp.delete_thread(scoped_tid_local)
+                    _rc.print(
+                        "  [warn] Corrupt checkpoint detected — session reset. Retrying...",
+                        style="yellow",
+                    )
+                    # Retry once with the same thread_id (now clean)
+                    return run_agent(task, mode=mode, provider=provider, model=model,
+                                     thread_id=thread_id, verbose=verbose)
+            except Exception:
+                pass  # Fall through to generic error
         return AgentResult(
             success=False,
             final_answer=f"Error: {e}",

@@ -20,20 +20,8 @@ from rich.panel import Panel
 from . import config
 from .agent import list_modes, run_agent, test_providers
 from .api_manager import APIManager
-
-# Import readline for better terminal input handling
-try:
-    import readline
-
-    READLINE_AVAILABLE = True
-except ImportError:
-    try:
-        import pyreadline3 as readline
-
-        READLINE_AVAILABLE = True
-    except ImportError:
-        print("⚠️  For better terminal experience, install: pip install pyreadline3")
-        READLINE_AVAILABLE = False
+from .session_manager import SessionManager
+from .tui import CommandorPrompt
 
 
 class AITerminal:
@@ -102,6 +90,13 @@ class AITerminal:
 
         # API manager (for /api commands)
         self._api_manager = APIManager()
+
+        # Session manager (for /sessions commands)
+        self._session_manager = SessionManager()
+        self._session_name: Optional[str] = None  # name of current session, if saved
+
+        # prompt_toolkit interactive prompt
+        self._prompt = CommandorPrompt(self.config_dir)
 
     def _display_ai_response(self, response: str, title: str = "AI Response"):
         """Display AI response using rich library for better formatting."""
@@ -341,50 +336,10 @@ class AITerminal:
         }
 
     def _setup_readline(self):
-        """Setup readline for better terminal input experience."""
-        if not READLINE_AVAILABLE:
-            return
-
-        # Set up history file
-        history_file = self.config_dir / "history"
-
-        try:
-            # Load existing history
-            if history_file.exists():
-                readline.read_history_file(str(history_file))
-
-            # Set history length
-            readline.set_history_length(1000)
-
-            # Enable tab completion for file paths
-            readline.set_completer_delims(" \t\n`!@#$%^&*()=+[{]}\\|;:'\",<>?")
-            readline.parse_and_bind("tab: complete")
-
-            # Enable vi or emacs mode (emacs is default)
-            readline.parse_and_bind("set editing-mode emacs")
-
-            # Configure better line wrapping behavior
-            readline.parse_and_bind("set horizontal-scroll-mode off")
-            readline.parse_and_bind("set disable-completion off")
-
-            # Custom key bindings
-            readline.parse_and_bind("\\C-p: previous-history")  # Ctrl+P for previous
-            readline.parse_and_bind("\\C-n: next-history")  # Ctrl+N for next
-
-            # Save history on exit
-            import atexit
-
-            atexit.register(lambda: self._save_history(history_file))
-
-        except Exception as e:
-            print(f"Warning: Could not setup readline: {e}")
+        """No-op: readline replaced by prompt_toolkit (CommandorPrompt)."""
 
     def _save_history(self, history_file):
-        """Save command history to file."""
-        try:
-            readline.write_history_file(str(history_file))
-        except Exception as e:
-            print(f"Warning: Could not save history: {e}")
+        """No-op: history is managed by prompt_toolkit FileHistory."""
 
     def _load_ask_history(self):
         """Load ask prompt history from file."""
@@ -686,6 +641,14 @@ class AITerminal:
         {self._colorize("/api default <provider>", "yellow")} - Set default provider
         {self._colorize("/test-providers", "yellow")}        - Quick test of all providers
 
+        {self._colorize("Session Management:", "bright_green")}
+        {self._colorize("/sessions", "yellow")}                        - List saved sessions
+        {self._colorize("/sessions save <name>", "yellow")}            - Name the current session
+        {self._colorize("/sessions new <name>", "yellow")}             - Start a fresh named session
+        {self._colorize("/sessions resume <name>", "yellow")}          - Switch to a saved session
+        {self._colorize("/sessions rename <old> <new>", "yellow")}     - Rename a session
+        {self._colorize("/sessions delete <name>", "yellow")}          - Delete a session
+
         {self._colorize("exit", "red")} or {self._colorize("Ctrl+C", "red")}       - Exit the terminal
 
         {self._colorize("Agent Mode Examples:", "bright_yellow")}
@@ -725,7 +688,7 @@ class AITerminal:
         {self._colorize("Config Directory:", "bright_cyan")} {self.config_dir}
         {self._colorize("API Key Status:", "bright_cyan")} {"✅ Configured" if self.api_key else "❌ Not configured"}
         {self._colorize("Model Status:", "bright_cyan")} {"✅ Initialized" if self.model else "❌ Not initialized"}
-        {self._colorize("Readline Support:", "bright_cyan")} {"✅ Available" if READLINE_AVAILABLE else "❌ Not available"}
+        {self._colorize("Input Mode:", "bright_cyan")} ✅ prompt_toolkit
         {self._colorize("API Key File:", "bright_cyan")} {self.env_file}
         {self._colorize("Ask History File:", "bright_cyan")} {self.ask_history_file}
         """
@@ -758,9 +721,6 @@ class AITerminal:
             self.command_history.append(command)
             if len(self.command_history) > self.max_history:
                 self.command_history.pop(0)
-
-            if READLINE_AVAILABLE:
-                readline.add_history(command)
 
     def add_to_ask_history(self, prompt: str):
         """Add ask prompt to ask history."""
@@ -795,12 +755,7 @@ class AITerminal:
 
         self._display_colorful_logo()
 
-        if READLINE_AVAILABLE:
-            print(f"✨ {self._colorize('Enhanced input mode active!', 'bright_green')}")
-        else:
-            print(
-                "⚠️  Basic input mode (install 'readline' or 'pyreadline3' for better experience)"
-            )
+        print(f"✨ {self._colorize('Interactive mode active (prompt_toolkit)', 'bright_green')}")
 
         print(
             f"Type {self._colorize('/help', 'bright_cyan')} for commands or {self._colorize('Ctrl+C', 'bright_yellow')} to exit."
@@ -812,7 +767,7 @@ class AITerminal:
 
         while True:
             try:
-                user_input = self.get_input(self.get_prompt())
+                user_input = self._prompt.get_input(self.get_prompt())
 
                 if not user_input:
                     continue
@@ -978,12 +933,12 @@ class AITerminal:
                     )
                     result = run_agent(task, mode="agent", thread_id=self.session_id)
 
-                    if result.success:
-                        self._display_ai_response(result.final_answer, "Task Completed")
-                    else:
+                    if not result.success:
                         print(self._colorize(f"❌ {result.final_answer}", "red"))
 
                     self.add_to_history(f"/agent {task}")
+                    if self._session_name:
+                        self._session_manager.update_last_used(self._session_name)
                     continue
 
                 elif user_input.startswith("/assist "):
@@ -1001,12 +956,12 @@ class AITerminal:
                     )
                     result = run_agent(task, mode="assist", thread_id=self.session_id)
 
-                    if result.success:
-                        self._display_ai_response(result.final_answer, "Task Completed")
-                    else:
+                    if not result.success:
                         print(self._colorize(f"❌ {result.final_answer}", "red"))
 
                     self.add_to_history(f"/assist {task}")
+                    if self._session_name:
+                        self._session_manager.update_last_used(self._session_name)
                     continue
 
                 elif user_input.startswith("/plan "):
@@ -1027,12 +982,12 @@ class AITerminal:
                     )
                     result = run_agent(task, mode="plan", thread_id=self.session_id)
 
-                    if result.success:
-                        self._display_ai_response(result.final_answer, "Task Completed")
-                    else:
+                    if not result.success:
                         print(self._colorize(f"❌ {result.final_answer}", "red"))
 
                     self.add_to_history(f"/plan {task}")
+                    if self._session_name:
+                        self._session_manager.update_last_used(self._session_name)
                     continue
 
                 elif user_input.startswith("/chat "):
@@ -1048,12 +1003,12 @@ class AITerminal:
                     print(self._colorize(f"\n💬 Thinking...", "bright_cyan"))
                     result = run_agent(question, mode="chat", thread_id=self.session_id)
 
-                    if result.success:
-                        self._display_ai_response(result.final_answer, "Answer")
-                    else:
+                    if not result.success:
                         print(self._colorize(f"❌ {result.final_answer}", "red"))
 
                     self.add_to_history(f"/chat {question}")
+                    if self._session_name:
+                        self._session_manager.update_last_used(self._session_name)
                     continue
 
                 elif user_input == "/providers":
@@ -1160,6 +1115,75 @@ class AITerminal:
                 elif user_input.startswith("/api default "):
                     provider = user_input[13:].strip()
                     self._api_manager.set_default(provider)
+                    continue
+
+                elif user_input == "/sessions":
+                    self._session_manager.show_sessions(current_id=self.session_id)
+                    continue
+
+                elif user_input.startswith("/sessions save "):
+                    name = user_input[15:].strip()
+                    if not name:
+                        print(self._colorize("Usage: /sessions save <name>", "yellow"))
+                        continue
+                    self._session_manager.save_session(name, self.session_id)
+                    self._session_name = name
+                    self._prompt.update_session(name)
+                    continue
+
+                elif user_input.startswith("/sessions new "):
+                    name = user_input[14:].strip()
+                    if not name:
+                        print(self._colorize("Usage: /sessions new <name>", "yellow"))
+                        continue
+                    new_id = self._session_manager.new_session(name)
+                    if new_id:
+                        self.session_id = new_id
+                        self._session_name = name
+                        self._prompt.update_session(name)
+                    continue
+
+                elif user_input.startswith("/sessions resume "):
+                    name = user_input[17:].strip()
+                    if not name:
+                        print(
+                            self._colorize("Usage: /sessions resume <name>", "yellow")
+                        )
+                        continue
+                    resumed_id = self._session_manager.resume_session(name)
+                    if resumed_id:
+                        self.session_id = resumed_id
+                        self._session_name = name
+                        self._prompt.update_session(name)
+                    continue
+
+                elif user_input.startswith("/sessions rename "):
+                    parts = user_input[17:].strip().split(maxsplit=1)
+                    if len(parts) < 2:
+                        print(
+                            self._colorize(
+                                "Usage: /sessions rename <old> <new>", "yellow"
+                            )
+                        )
+                        continue
+                    self._session_manager.rename_session(parts[0], parts[1])
+                    if self._session_name == parts[0]:
+                        self._session_name = parts[1]
+                        self._prompt.update_session(parts[1])
+                    continue
+
+                elif user_input.startswith("/sessions delete "):
+                    name = user_input[17:].strip()
+                    if not name:
+                        print(
+                            self._colorize(
+                                "Usage: /sessions delete <name>", "yellow"
+                            )
+                        )
+                        continue
+                    self._session_manager.delete_session(
+                        name, current_id=self.session_id
+                    )
                     continue
 
                 else:

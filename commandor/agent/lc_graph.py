@@ -5,20 +5,21 @@ Graph factory functions:
   - build_chat_graph   → no tools, pure conversation
   - build_assist_graph → pauses before every tool node (human-in-the-loop)
 
-A single module-level MemorySaver is shared across all graphs so that
-conversation memory persists across multiple run_agent() calls within the
-same terminal session (scoped by thread_id).
+A single module-level SqliteSaver is shared across all graphs so that
+conversation memory persists across multiple run_agent() calls and across
+terminal restarts (stored at ~/.commandor/checkpoints.db).
 
 Constants:
   - SYSTEM_PROMPT   → base system prompt for all modes
   - PLANNING_SUFFIX → appended for plan-mode Phase 1 (planning only, no tools)
 """
 
+import sqlite3
 import warnings
+from pathlib import Path
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
 with warnings.catch_warnings():
@@ -26,10 +27,28 @@ with warnings.catch_warnings():
     from langgraph.prebuilt import create_react_agent
 
 # ---------------------------------------------------------------------------
-# Shared in-process checkpoint store (one per interpreter lifetime).
-# Scoped per thread_id so agent / chat / assist sessions never conflict.
+# Shared persistent checkpoint store.
+# Uses SqliteSaver so sessions survive process restarts.
+# Falls back to MemorySaver if the sqlite package is unavailable.
 # ---------------------------------------------------------------------------
-_checkpointer = MemorySaver()
+_db_path = Path.home() / ".commandor" / "checkpoints.db"
+_db_path.parent.mkdir(exist_ok=True)
+
+try:
+    from langgraph.checkpoint.sqlite import SqliteSaver as _SaverClass
+
+    _conn = sqlite3.connect(str(_db_path), check_same_thread=False)
+    _checkpointer = _SaverClass(_conn)
+    _checkpointer.setup()
+except Exception:  # pragma: no cover
+    from langgraph.checkpoint.memory import MemorySaver as _SaverClass  # type: ignore[assignment]
+
+    _checkpointer = _SaverClass()
+
+
+def get_checkpointer():
+    """Return the module-level checkpoint store (SqliteSaver or MemorySaver)."""
+    return _checkpointer
 
 # ---------------------------------------------------------------------------
 # System prompt
