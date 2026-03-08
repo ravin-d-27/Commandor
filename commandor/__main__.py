@@ -39,6 +39,11 @@ def main():
         help="Run in chat mode (Q&A only)"
     )
     parser.add_argument(
+        "-n", "--plan",
+        action="store_true",
+        help="Run in plan mode (review plan before execution)"
+    )
+    parser.add_argument(
         "-p", "--provider",
         help="AI provider to use (gemini, anthropic, openai, openrouter)"
     )
@@ -69,13 +74,15 @@ def main():
         return 0
     
     # If we have a task and a mode flag, run in that mode
-    if args.task and (args.agent or args.assist or args.chat):
+    if args.task and (args.agent or args.assist or args.chat or args.plan):
         task = " ".join(args.task)
         
         if args.agent:
             mode = "agent"
         elif args.assist:
             mode = "assist"
+        elif args.plan:
+            mode = "plan"
         else:
             mode = "chat"
         

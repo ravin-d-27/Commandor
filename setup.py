@@ -27,6 +27,11 @@ setup(
         "pyyaml>=6.0",
         "python-dotenv>=1.0.0",
         "pyreadline3>=3.4.1; platform_system=='Windows'",
+        "langchain-core>=1.2.0",
+        "langgraph>=1.0.0",
+        "langchain-google-genai>=4.2.0",
+        "langchain-anthropic>=1.3.0",
+        "langchain-openai>=1.1.0",
     ],
     entry_points={
         "console_scripts": [

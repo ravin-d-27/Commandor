@@ -1,21 +1,5 @@
-from .base import BaseProvider, Message, Response, ToolCall, ProviderError, AuthenticationError, RateLimitError
-from .gemini import GeminiProvider
-from .anthropic import AnthropicProvider
-from .openai import OpenAIProvider
-from .openrouter import OpenRouterProvider
-from .factory import ProviderFactory
+"""providers package — slim shim that exports only AgentResult."""
 
-__all__ = [
-    'BaseProvider',
-    'Message',
-    'Response', 
-    'ToolCall',
-    'ProviderError',
-    'AuthenticationError',
-    'RateLimitError',
-    'ProviderFactory',
-    'GeminiProvider',
-    'AnthropicProvider',
-    'OpenAIProvider',
-    'OpenRouterProvider',
-]
+from .base import AgentResult
+
+__all__ = ["AgentResult"]

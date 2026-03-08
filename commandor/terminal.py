@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import uuid
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -18,7 +19,7 @@ from rich.panel import Panel
 # Import new agent system
 from . import config
 from .agent import list_modes, run_agent, test_providers
-from .providers import ProviderFactory
+from .api_manager import APIManager
 
 # Import readline for better terminal input handling
 try:
@@ -60,6 +61,7 @@ class AITerminal:
 
         # Initialize other attributes
         self.api_key = None
+        self.session_id = str(uuid.uuid4())
         self.current_dir = Path.cwd()
         self.command_history = []
         self.ask_history = []  # Dedicated history for /ask prompts
@@ -98,17 +100,28 @@ class AITerminal:
         # Load ask history
         self._load_ask_history()
 
+        # API manager (for /api commands)
+        self._api_manager = APIManager()
+
     def _display_ai_response(self, response: str, title: str = "AI Response"):
         """Display AI response using rich library for better formatting."""
 
         # Create markdown object
         markdown = Markdown(response)
 
+        # Resolve current provider name for subtitle
+        try:
+            cfg = config.get_config()
+            provider_name = cfg.config.default_provider if cfg.config else "gemini"
+        except Exception:
+            provider_name = "gemini"
+        subtitle = f"Powered by {provider_name.capitalize()}"
+
         # Create a panel with the markdown content
         panel = Panel(
             markdown,
             title=f"🤖 {title}",
-            subtitle="Powered by Gemini",
+            subtitle=subtitle,
             border_style="cyan",
             padding=(1, 2),
             expand=False,
@@ -640,9 +653,10 @@ class AITerminal:
         {self._colorize("🚀 Commandor Help Guide 🚀", "bold")}
         {self._colorize("=" * 60, "bright_blue")}
 
-        {self._colorize("Agent Commands (NEW!):", "bright_green")}
+        {self._colorize("Agent Commands:", "bright_green")}
         {self._colorize("/agent <task>", "bright_cyan")}    - Run autonomous agent
         {self._colorize("/assist <task>", "bright_cyan")}   - Run with confirmations
+        {self._colorize("/plan <task>", "bright_cyan")}     - Plan then execute (review before run)
         {self._colorize("/chat <question>", "bright_magenta")} - Ask AI questions
 
         {self._colorize("Traditional Commands:", "bright_green")}
@@ -660,25 +674,30 @@ class AITerminal:
 
         {self._colorize("Provider Commands:", "bright_green")}
         {self._colorize("/provider <name>", "yellow")}    - Switch AI provider
-        {self._colorize("/model <name>", "yellow")}       - Switch model
         {self._colorize("/providers", "yellow")}          - List available providers
         {self._colorize("/modes", "yellow")}              - Show agent modes
+
+        {self._colorize("API Management:", "bright_green")}
+        {self._colorize("/api", "yellow")}                   - Show API key status table
+        {self._colorize("/api set <provider> <key>", "yellow")}  - Set API key for a provider
+        {self._colorize("/api model <provider> <model>", "yellow")} - Set default model for a provider
+        {self._colorize("/api test [provider]", "yellow")}   - Test one or all providers
+        {self._colorize("/api remove <provider>", "yellow")} - Remove a provider's API key
+        {self._colorize("/api default <provider>", "yellow")} - Set default provider
+        {self._colorize("/test-providers", "yellow")}        - Quick test of all providers
 
         {self._colorize("exit", "red")} or {self._colorize("Ctrl+C", "red")}       - Exit the terminal
 
         {self._colorize("Agent Mode Examples:", "bright_yellow")}
         {self._colorize("/agent", "bright_cyan")} fix the bug in main.py
-        {self._colorize("/agent", "bright_cyan")} add tests for auth module
+        {self._colorize("/plan", "bright_cyan")} add tests for auth module
         {self._colorize("/assist", "bright_cyan")} create a new feature
 
-        {self._colorize("Ask AI Examples:", "bright_yellow")}
-        {self._colorize("/ask", "bright_magenta")} What is the difference between Python and JavaScript?
-        {self._colorize("/chat", "bright_magenta")} How do I optimize my code?
-
-        {self._colorize("API Management:", "bright_yellow")}
-        {self._colorize("/reset-api", "yellow")}         - Change your API key
-        {self._colorize("/test-api", "yellow")}          - Verify API key is working
-        {self._colorize("/providers", "yellow")}          - List all providers
+        {self._colorize("API Management Examples:", "bright_yellow")}
+        {self._colorize("/api set gemini", "yellow")} AIzaSy...
+        {self._colorize("/api model openai", "yellow")} gpt-4o
+        {self._colorize("/api default anthropic", "yellow")}
+        {self._colorize("/api test", "yellow")}
 
         {self._colorize("💡 Regular shell commands work too!", "bright_green")}
         """
@@ -957,7 +976,7 @@ class AITerminal:
                             f"\n🚀 Running autonomous agent...", "bright_green"
                         )
                     )
-                    result = run_agent(task, mode="agent")
+                    result = run_agent(task, mode="agent", thread_id=self.session_id)
 
                     if result.success:
                         self._display_ai_response(result.final_answer, "Task Completed")
@@ -980,7 +999,7 @@ class AITerminal:
                     print(
                         self._colorize(f"\n🔧 Running assist mode...", "bright_yellow")
                     )
-                    result = run_agent(task, mode="assist")
+                    result = run_agent(task, mode="assist", thread_id=self.session_id)
 
                     if result.success:
                         self._display_ai_response(result.final_answer, "Task Completed")
@@ -988,6 +1007,32 @@ class AITerminal:
                         print(self._colorize(f"❌ {result.final_answer}", "red"))
 
                     self.add_to_history(f"/assist {task}")
+                    continue
+
+                elif user_input.startswith("/plan "):
+                    task = user_input[6:].strip()
+                    if not task:
+                        print(
+                            self._colorize(
+                                "❓ Please provide a task after /plan", "yellow"
+                            )
+                        )
+                        continue
+
+                    print(
+                        self._colorize(
+                            f"\n📋 Running plan mode — generating plan first...",
+                            "bright_cyan",
+                        )
+                    )
+                    result = run_agent(task, mode="plan", thread_id=self.session_id)
+
+                    if result.success:
+                        self._display_ai_response(result.final_answer, "Task Completed")
+                    else:
+                        print(self._colorize(f"❌ {result.final_answer}", "red"))
+
+                    self.add_to_history(f"/plan {task}")
                     continue
 
                 elif user_input.startswith("/chat "):
@@ -1001,7 +1046,7 @@ class AITerminal:
                         continue
 
                     print(self._colorize(f"\n💬 Thinking...", "bright_cyan"))
-                    result = run_agent(question, mode="chat")
+                    result = run_agent(question, mode="chat", thread_id=self.session_id)
 
                     if result.success:
                         self._display_ai_response(result.final_answer, "Answer")
@@ -1069,6 +1114,52 @@ class AITerminal:
                                     "red",
                                 )
                             )
+                    continue
+
+                elif user_input == "/api":
+                    self._api_manager.show_status()
+                    continue
+
+                elif user_input.startswith("/api set "):
+                    parts = user_input[9:].strip().split(maxsplit=1)
+                    if len(parts) < 2:
+                        print(
+                            self._colorize(
+                                "Usage: /api set <provider> <key>", "yellow"
+                            )
+                        )
+                        continue
+                    self._api_manager.set_key(parts[0], parts[1])
+                    continue
+
+                elif user_input.startswith("/api model "):
+                    parts = user_input[11:].strip().split(maxsplit=1)
+                    if len(parts) < 2:
+                        print(
+                            self._colorize(
+                                "Usage: /api model <provider> <model>", "yellow"
+                            )
+                        )
+                        continue
+                    self._api_manager.set_model(parts[0], parts[1])
+                    continue
+
+                elif user_input.startswith("/api test"):
+                    arg = user_input[9:].strip()
+                    if arg:
+                        self._api_manager.test_provider(arg)
+                    else:
+                        self._api_manager.test_all()
+                    continue
+
+                elif user_input.startswith("/api remove "):
+                    provider = user_input[12:].strip()
+                    self._api_manager.remove_key(provider)
+                    continue
+
+                elif user_input.startswith("/api default "):
+                    provider = user_input[13:].strip()
+                    self._api_manager.set_default(provider)
                     continue
 
                 else:

@@ -166,6 +166,22 @@ ui:
             self.config.providers[name].api_key = api_key
             self.save()
 
+    def remove_provider_key(self, name: str):
+        """Clear the stored API key for a provider."""
+        if name in self.config.providers:
+            self.config.providers[name].api_key = None
+            self.save()
+
+    def set_provider_model(self, name: str, model: str):
+        """Set the default model for a provider."""
+        if name not in self.config.providers:
+            self.config.providers[name] = ProviderConfig(
+                enabled=True, api_key=None, default_model=model
+            )
+        else:
+            self.config.providers[name].default_model = model
+        self.save()
+
     def get_enabled_providers(self) -> list:
         """Get list of enabled provider names"""
         return [name for name, p in self.config.providers.items() if p.enabled]
