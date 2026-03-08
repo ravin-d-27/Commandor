@@ -97,6 +97,7 @@ class AITerminal:
 
         # prompt_toolkit interactive prompt
         self._prompt = CommandorPrompt(self.config_dir)
+        self._prompt.update_session(None, self.session_id)
 
     def _display_ai_response(self, response: str, title: str = "AI Response"):
         """Display AI response using rich library for better formatting."""
@@ -936,6 +937,8 @@ class AITerminal:
                     if not result.success:
                         print(self._colorize(f"❌ {result.final_answer}", "red"))
 
+                    if result.metrics:
+                        self._prompt.update_metrics(**result.metrics)
                     self.add_to_history(f"/agent {task}")
                     if self._session_name:
                         self._session_manager.update_last_used(self._session_name)
@@ -959,6 +962,8 @@ class AITerminal:
                     if not result.success:
                         print(self._colorize(f"❌ {result.final_answer}", "red"))
 
+                    if result.metrics:
+                        self._prompt.update_metrics(**result.metrics)
                     self.add_to_history(f"/assist {task}")
                     if self._session_name:
                         self._session_manager.update_last_used(self._session_name)
@@ -985,6 +990,8 @@ class AITerminal:
                     if not result.success:
                         print(self._colorize(f"❌ {result.final_answer}", "red"))
 
+                    if result.metrics:
+                        self._prompt.update_metrics(**result.metrics)
                     self.add_to_history(f"/plan {task}")
                     if self._session_name:
                         self._session_manager.update_last_used(self._session_name)
@@ -1006,6 +1013,8 @@ class AITerminal:
                     if not result.success:
                         print(self._colorize(f"❌ {result.final_answer}", "red"))
 
+                    if result.metrics:
+                        self._prompt.update_metrics(**result.metrics)
                     self.add_to_history(f"/chat {question}")
                     if self._session_name:
                         self._session_manager.update_last_used(self._session_name)
@@ -1128,7 +1137,7 @@ class AITerminal:
                         continue
                     self._session_manager.save_session(name, self.session_id)
                     self._session_name = name
-                    self._prompt.update_session(name)
+                    self._prompt.update_session(name, session_id=self.session_id)
                     continue
 
                 elif user_input.startswith("/sessions new "):
@@ -1140,7 +1149,7 @@ class AITerminal:
                     if new_id:
                         self.session_id = new_id
                         self._session_name = name
-                        self._prompt.update_session(name)
+                        self._prompt.update_session(name, session_id=self.session_id)
                     continue
 
                 elif user_input.startswith("/sessions resume "):
@@ -1154,7 +1163,7 @@ class AITerminal:
                     if resumed_id:
                         self.session_id = resumed_id
                         self._session_name = name
-                        self._prompt.update_session(name)
+                        self._prompt.update_session(name, session_id=self.session_id)
                     continue
 
                 elif user_input.startswith("/sessions rename "):
@@ -1169,7 +1178,7 @@ class AITerminal:
                     self._session_manager.rename_session(parts[0], parts[1])
                     if self._session_name == parts[0]:
                         self._session_name = parts[1]
-                        self._prompt.update_session(parts[1])
+                        self._prompt.update_session(parts[1], session_id=self.session_id)
                     continue
 
                 elif user_input.startswith("/sessions delete "):

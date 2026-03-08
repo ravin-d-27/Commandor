@@ -17,6 +17,7 @@ Commandor is an **Agentic CLI** (similar to OpenCode or Codex CLI) that uses AI 
 ### Agent Modes
 - **`/agent`** - Autonomous mode: Agent executes tasks without asking for confirmation
 - **`/assist`** - Assist mode: Agent asks for confirmation before each action
+- **`/plan`** - Plan mode: Generate plan first, then execute (review before run)
 - **`/chat`** - Chat mode: Ask questions without executing actions
 
 ### Multi-Provider Support
@@ -30,6 +31,9 @@ Commandor is an **Agentic CLI** (similar to OpenCode or Codex CLI) that uses AI 
 - **Search**: Glob, Grep for finding files and content
 - **Shell**: Run commands, list directories
 - **Project**: Git info, project files, environment info
+- **Session Management**: Save, resume, and manage sessions
+- **API Management**: Configure providers and models
+- **Rich Markdown Rendering**: AI responses with enhanced formatting
 
 ---
 

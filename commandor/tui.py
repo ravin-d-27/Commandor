@@ -6,9 +6,12 @@ adds:
   - Auto-suggestions from history
   - Tab-completion for all slash commands
   - Syntax highlighting: /commands in cyan, everything else default
-  - Bottom toolbar showing: provider | session name | cwd  (read live each render)
+  - Bottom toolbar (2 lines):
+      Line 1: provider | session name + short ID | cwd
+      Line 2: model | context tokens | last token usage | condensation count
   - Escape+Enter for multi-line input
-  - ``update_session(name)`` to update the displayed session name
+  - ``update_session(name, session_id)`` to update the displayed session info
+  - ``update_metrics(...)`` to refresh the metrics line after each agent run
   - ``get_input(prompt_str) -> str`` main entrypoint
 """
 
@@ -129,6 +132,8 @@ class CommandorPrompt:
     def __init__(self, config_dir: Path) -> None:
         self._config_dir = config_dir
         self._session_name: Optional[str] = None
+        self._session_id: Optional[str] = None
+        self._metrics: Optional[dict] = None
 
         history_path = config_dir / "pt_history"
         history_path.parent.mkdir(parents=True, exist_ok=True)
@@ -156,9 +161,29 @@ class CommandorPrompt:
     # Public API
     # ------------------------------------------------------------------
 
-    def update_session(self, name: Optional[str]) -> None:
-        """Update the session name shown in the toolbar."""
+    def update_session(self, name: Optional[str], session_id: Optional[str] = None) -> None:
+        """Update the session name and ID shown in the toolbar."""
         self._session_name = name
+        if session_id is not None:
+            self._session_id = session_id
+
+    def update_metrics(
+        self,
+        model: Optional[str] = None,
+        approx_tokens: Optional[int] = None,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
+        condensations: int = 0,
+        **_kwargs: object,
+    ) -> None:
+        """Refresh the metrics shown on the second toolbar line."""
+        self._metrics = {
+            "model": model,
+            "approx_tokens": approx_tokens,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "condensations": condensations,
+        }
 
     def get_input(self, prompt_str: str = "") -> str:
         """Prompt the user and return their stripped input.
@@ -181,21 +206,35 @@ class CommandorPrompt:
     # ------------------------------------------------------------------
 
     def _get_toolbar(self) -> HTML:
-        """Build the bottom toolbar content — called live on every render."""
+        """Build the two-line bottom toolbar content — called live on every render."""
+        # -- Provider --
         try:
             from .config import get_config  # noqa: PLC0415
             cfg = get_config()
             provider = cfg.config.default_provider if cfg.config else "gemini"
+            model_from_config = ""
+            if cfg.config:
+                pconfig = cfg.get_provider_config(provider)
+                model_from_config = pconfig.default_model if pconfig else ""
         except Exception:
             provider = "gemini"
+            model_from_config = ""
 
-        session_part = (
-            f" | session: <b>{self._session_name}</b>" if self._session_name else ""
-        )
+        # -- Session --
+        if self._session_name and self._session_id:
+            short_id = self._session_id[:8]
+            session_part = f" | session: <b>{self._session_name}</b> · {short_id}…"
+        elif self._session_name:
+            session_part = f" | session: <b>{self._session_name}</b>"
+        elif self._session_id:
+            short_id = self._session_id[:8]
+            session_part = f" | session: {short_id}… (unsaved)"
+        else:
+            session_part = ""
 
+        # -- CWD --
         try:
             cwd = os.getcwd()
-            # Show last 2 path components to keep the toolbar short
             parts = Path(cwd).parts
             if len(parts) > 2:
                 cwd_display = ".../" + "/".join(parts[-2:])
@@ -204,6 +243,21 @@ class CommandorPrompt:
         except Exception:
             cwd_display = "?"
 
-        return HTML(
-            f" provider: <b>{provider}</b>{session_part} | cwd: {cwd_display} "
-        )
+        line1 = f" provider: <b>{provider}</b>{session_part} | cwd: {cwd_display} "
+
+        # -- Metrics line --
+        if self._metrics:
+            model = self._metrics.get("model") or model_from_config or "—"
+            ctx = self._metrics.get("approx_tokens")
+            ctx_str = f"~{ctx:,} tok" if ctx else "—"
+            inp = self._metrics.get("input_tokens")
+            out = self._metrics.get("output_tokens")
+            usage_str = f"in {inp:,} · out {out:,}" if inp and out else "—"
+            cond = self._metrics.get("condensations", 0)
+            cond_str = f" | condensed: {cond}×" if cond else ""
+            line2 = f" model: <b>{model}</b> | context: {ctx_str} | last: {usage_str}{cond_str} "
+        else:
+            model_display = model_from_config or "—"
+            line2 = f" model: <b>{model_display}</b> | context: — | ready "
+
+        return HTML(f"{line1}\n{line2}")

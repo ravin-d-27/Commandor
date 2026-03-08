@@ -101,7 +101,7 @@ def _extract_final_answer(state: dict) -> str:
 # Context summarization
 # ---------------------------------------------------------------------------
 
-SUMMARIZE_THRESHOLD_TOKENS = 6000  # ~24 000 chars; leaves headroom before most model limits
+SUMMARIZE_THRESHOLD_TOKENS = 15000  # ~60 000 chars; leaves headroom before most model limits
 
 
 def _approx_tokens(messages: list) -> int:
@@ -110,7 +110,7 @@ def _approx_tokens(messages: list) -> int:
     return len(get_buffer_string(messages)) // 4
 
 
-def _make_summarize_hook(llm):
+def _make_summarize_hook(llm, metrics: dict | None = None):
     """Return a ``pre_model_hook`` that compresses history when context grows large.
 
     The hook runs before every LLM call inside the graph.  When the approximate
@@ -121,6 +121,7 @@ def _make_summarize_hook(llm):
     3. Asks the LLM to summarise everything in between into 2–3 paragraphs.
     4. Replaces the middle messages with a single condensed ``HumanMessage``.
 
+    Increments ``metrics["condensations"]`` on each successful condensation.
     On any failure the hook returns ``{}`` (no-op) so the graph continues.
     """
     def _hook(state: dict) -> dict:
@@ -155,11 +156,16 @@ def _make_summarize_hook(llm):
             summary_text = (
                 response.content if hasattr(response, "content") else str(response)
             )
+            # Cap the summary itself so it doesn't eat into the freed space
+            if len(summary_text) > 3000:
+                summary_text = summary_text[:3000] + "\n… (summary truncated)"
             condensed = HumanMessage(
                 content=f"[Context summary — history condensed to save space]\n{summary_text}"
             )
             new_messages = system_msgs + [condensed] + keep_recent
             _rc.print("[dim cyan]  ↻ context condensed[/dim cyan]")
+            if metrics is not None:
+                metrics["condensations"] = metrics.get("condensations", 0) + 1
             return {"messages": new_messages}
         except Exception:
             return {}  # on failure, do nothing — better to continue than crash
@@ -167,7 +173,7 @@ def _make_summarize_hook(llm):
     return _hook
 
 
-def _stream_graph(graph, input_data, config: dict) -> str:
+def _stream_graph(graph, input_data, config: dict, metrics: dict | None = None) -> str:
     """Stream graph events, printing tool call announcements and a final response panel.
 
     Shows a spinner while waiting for the first token or tool call.  Tool call
@@ -175,10 +181,17 @@ def _stream_graph(graph, input_data, config: dict) -> str:
     ghost panel borders are left on screen.  All response tokens are accumulated
     silently and rendered as a single ``Panel`` at the end.
 
+    When ``metrics`` is provided, tracks:
+    - ``input_tokens`` / ``output_tokens`` from ``usage_metadata`` (best-effort)
+    - Thinking blocks (Gemini / Anthropic extended thinking) are displayed before
+      the response panel when present.
+
     Returns the accumulated text from all ``AIMessageChunk.content`` strings.
     """
     accumulated = ""
+    thinking_accumulated = ""
     seen_call_ids: set[str] = set()
+    last_usage = None
 
     status = _rc.status("[dim cyan]  thinking...[/dim cyan]", spinner="dots")
     status.start()
@@ -194,6 +207,17 @@ def _stream_graph(graph, input_data, config: dict) -> str:
         for chunk, _meta in graph.stream(input_data, config, stream_mode="messages"):
             if not isinstance(chunk, AIMessageChunk):
                 continue
+
+            # -- Track usage metadata (best-effort; not all providers emit it) --
+            usage = getattr(chunk, "usage_metadata", None)
+            if usage:
+                last_usage = usage
+
+            # -- Detect thinking blocks (Gemini / Anthropic extended thinking) --
+            if isinstance(chunk.content, list):
+                for block in chunk.content:
+                    if isinstance(block, dict) and block.get("type") == "thinking":
+                        thinking_accumulated += block.get("thinking", "")
 
             # -- Announce tool calls --
             tcc = getattr(chunk, "tool_call_chunks", []) or []
@@ -217,8 +241,28 @@ def _stream_graph(graph, input_data, config: dict) -> str:
     finally:
         _stop_spinner()
 
+    # Display thinking panel when present
+    if thinking_accumulated:
+        _rc.print(Panel(
+            Markdown(thinking_accumulated),
+            title="[dim]Thinking[/dim]",
+            border_style="dim",
+            padding=(0, 1),
+        ))
+
     if accumulated:
         _rc.print(Panel(Markdown(accumulated), border_style="cyan", padding=(0, 1)))
+
+    # Update metrics with token usage
+    if metrics is not None and last_usage:
+        metrics["input_tokens"] = (
+            last_usage.get("input_tokens")
+            or last_usage.get("prompt_tokens")
+        )
+        metrics["output_tokens"] = (
+            last_usage.get("output_tokens")
+            or last_usage.get("completion_tokens")
+        )
 
     return accumulated
 
@@ -227,45 +271,49 @@ def _stream_graph(graph, input_data, config: dict) -> str:
 # Mode runners
 # ---------------------------------------------------------------------------
 
-def _run_agent(llm, task: str, system_prompt: str, config: dict, verbose: bool) -> AgentResult:
+def _run_agent(llm, task: str, system_prompt: str, config: dict, verbose: bool, metrics: dict) -> AgentResult:
     """Fully autonomous agent run (streaming)."""
-    hook = _make_summarize_hook(llm)
+    hook = _make_summarize_hook(llm, metrics)
     graph = build_agent_graph(llm, ALL_TOOLS, system_prompt, pre_model_hook=hook)
-    _stream_graph(graph, {"messages": [HumanMessage(content=task)]}, config)
+    _stream_graph(graph, {"messages": [HumanMessage(content=task)]}, config, metrics)
 
     state = graph.get_state(config)
+    metrics["approx_tokens"] = _approx_tokens(state.values.get("messages", []))
     return AgentResult(
         success=True,
         final_answer=_extract_final_answer(state.values),
         steps=[],
+        metrics=metrics,
     )
 
 
-def _run_chat(llm, task: str, system_prompt: str, config: dict, verbose: bool) -> AgentResult:
+def _run_chat(llm, task: str, system_prompt: str, config: dict, verbose: bool, metrics: dict) -> AgentResult:
     """Chat-only (no tools) run (streaming)."""
     graph = build_chat_graph(llm, system_prompt)
-    _stream_graph(graph, {"messages": [HumanMessage(content=task)]}, config)
+    _stream_graph(graph, {"messages": [HumanMessage(content=task)]}, config, metrics)
 
     state = graph.get_state(config)
+    metrics["approx_tokens"] = _approx_tokens(state.values.get("messages", []))
     return AgentResult(
         success=True,
         final_answer=_extract_final_answer(state.values),
         steps=[],
+        metrics=metrics,
     )
 
 
-def _run_assist(llm, task: str, system_prompt: str, config: dict, verbose: bool) -> AgentResult:
+def _run_assist(llm, task: str, system_prompt: str, config: dict, verbose: bool, metrics: dict) -> AgentResult:
     """Human-in-the-loop assist run (streaming).
 
     Streams each graph segment; pauses before every tool-call batch for user
     approval (y/n/q).  Denied calls inject synthetic ToolMessages so the LLM
     can recover gracefully.
     """
-    hook = _make_summarize_hook(llm)
+    hook = _make_summarize_hook(llm, metrics)
     graph = build_assist_graph(llm, ALL_TOOLS, system_prompt, pre_model_hook=hook)
 
     # Stream the initial segment — graph stops at interrupt_before="tools"
-    _stream_graph(graph, {"messages": [HumanMessage(content=task)]}, config)
+    _stream_graph(graph, {"messages": [HumanMessage(content=task)]}, config, metrics)
 
     while True:
         state = graph.get_state(config)
@@ -276,7 +324,7 @@ def _run_assist(llm, task: str, system_prompt: str, config: dict, verbose: bool)
 
         if "tools" not in state.next:
             # Unexpected non-tool interrupt; just resume.
-            _stream_graph(graph, None, config)
+            _stream_graph(graph, None, config, metrics)
             continue
 
         # -- Human-in-the-loop: show pending tool calls --
@@ -288,7 +336,7 @@ def _run_assist(llm, task: str, system_prompt: str, config: dict, verbose: bool)
                 break
 
         if not pending:
-            _stream_graph(graph, None, config)
+            _stream_graph(graph, None, config, metrics)
             continue
 
         print("\n  [assist] Planned actions:")
@@ -308,11 +356,12 @@ def _run_assist(llm, task: str, system_prompt: str, config: dict, verbose: bool)
                 success=False,
                 final_answer="Task cancelled by user.",
                 steps=[],
+                metrics=metrics,
             )
 
         if answer in ("y", "yes", ""):
             # Execute the tools and stream what follows
-            _stream_graph(graph, None, config)
+            _stream_graph(graph, None, config, metrics)
         else:
             # Inject denied ToolMessages, then stream the LLM's recovery reply
             denied_msgs = [
@@ -327,17 +376,19 @@ def _run_assist(llm, task: str, system_prompt: str, config: dict, verbose: bool)
                 {"messages": denied_msgs},
                 as_node="tools",
             )
-            _stream_graph(graph, None, config)
+            _stream_graph(graph, None, config, metrics)
 
     state = graph.get_state(config)
+    metrics["approx_tokens"] = _approx_tokens(state.values.get("messages", []))
     return AgentResult(
         success=True,
         final_answer=_extract_final_answer(state.values),
         steps=[],
+        metrics=metrics,
     )
 
 
-def _run_plan(llm, task: str, system_prompt: str, config: dict, verbose: bool) -> AgentResult:
+def _run_plan(llm, task: str, system_prompt: str, config: dict, verbose: bool, metrics: dict) -> AgentResult:
     """Plan-then-execute mode.
 
     Phase 1 — Planning (no tools):
@@ -369,6 +420,7 @@ def _run_plan(llm, task: str, system_prompt: str, config: dict, verbose: bool) -
             plan_graph,
             {"messages": [HumanMessage(content=user_msg)]},
             plan_config,
+            # Don't pass metrics to planning phases — only execution counts
         )
         state = plan_graph.get_state(plan_config)
         return _extract_final_answer(state.values)
@@ -402,6 +454,7 @@ def _run_plan(llm, task: str, system_prompt: str, config: dict, verbose: bool) -
                 success=False,
                 final_answer="Plan rejected by user.",
                 steps=[],
+                metrics=metrics,
             )
 
         if answer in ("y", "yes", ""):
@@ -415,6 +468,7 @@ def _run_plan(llm, task: str, system_prompt: str, config: dict, verbose: bool) -
                     success=False,
                     final_answer="Plan cancelled.",
                     steps=[],
+                    metrics=metrics,
                 )
             if feedback:
                 _rc.print("\n  [plan] Revising plan...", style="dim")
@@ -440,19 +494,22 @@ def _run_plan(llm, task: str, system_prompt: str, config: dict, verbose: bool) -
 
     _rc.print("\n  [plan] Executing approved plan...", style="dim")
     exec_config = {"configurable": {"thread_id": f"plan_exec_{uuid.uuid4()}"}}
-    hook = _make_summarize_hook(llm)
+    hook = _make_summarize_hook(llm, metrics)
     agent_graph = build_agent_graph(llm, ALL_TOOLS, execution_prompt, pre_model_hook=hook)
     _stream_graph(
         agent_graph,
         {"messages": [HumanMessage(content=task)]},
         exec_config,
+        metrics,
     )
 
     exec_state = agent_graph.get_state(exec_config)
+    metrics["approx_tokens"] = _approx_tokens(exec_state.values.get("messages", []))
     return AgentResult(
         success=True,
         final_answer=_extract_final_answer(exec_state.values),
         steps=[],
+        metrics=metrics,
     )
 
 
@@ -507,14 +564,17 @@ def run_agent(
         scoped_tid = f"{mode}_{thread_id or uuid.uuid4()}"
         config = {"configurable": {"thread_id": scoped_tid}}
 
+        # Metrics dict shared with mode runners and hooks
+        metrics: dict = {"model": resolved_model, "condensations": 0}
+
         if mode == "agent":
-            return _run_agent(llm, task, system_prompt, config, verbose)
+            return _run_agent(llm, task, system_prompt, config, verbose, metrics)
         elif mode == "chat":
-            return _run_chat(llm, task, system_prompt, config, verbose)
+            return _run_chat(llm, task, system_prompt, config, verbose, metrics)
         elif mode == "assist":
-            return _run_assist(llm, task, system_prompt, config, verbose)
+            return _run_assist(llm, task, system_prompt, config, verbose, metrics)
         elif mode == "plan":
-            return _run_plan(llm, task, system_prompt, config, verbose)
+            return _run_plan(llm, task, system_prompt, config, verbose, metrics)
         else:
             return AgentResult(
                 success=False,
