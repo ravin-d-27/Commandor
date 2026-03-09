@@ -110,17 +110,36 @@ commandor --chat "what is async/await in Python?"
 |---------|-------------|
 | `/agent <task>` | Run autonomous agent |
 | `/assist <task>` | Run with confirmations |
+| `/plan <task>` | Plan then execute (review before run) |
 | `/chat <question>` | Ask AI questions |
 | `/ai <instruction>` | Convert natural language to shell command |
-| `/ask <question>` | Ask AI any question |
+| `/ask <question>` | Ask AI any question directly |
 | `/provider <name>` | Switch AI provider |
 | `/providers` | List available providers |
 | `/modes` | Show agent modes |
 | `/setup` | Run interactive setup |
 | `/test-providers` | Test all configured providers |
 | `/help` | Show help |
-| `/info` | Show system info |
-| `/clear` | Clear screen |
+| `/info` | Show system information |
+| `/history` | Show recent command history |
+| `/ask-history` | Show your question history |
+| `/ask-search <term>` | Search your question history |
+| `/clear` | Clear the screen |
+| `/config` | Show configuration info |
+| `/reset-api` | Reset and reconfigure API key |
+| `/test-api` | Test current API key |
+| `/api` | Show API key status table |
+| `/api set <provider> <key>` | Set API key for a provider |
+| `/api model <provider> <model>` | Set default model for a provider |
+| `/api test [provider]` | Test one or all providers |
+| `/api remove <provider>` | Remove a provider's API key |
+| `/api default <provider>` | Set default provider |
+| `/sessions` | List saved sessions |
+| `/sessions save <name>` | Name the current session |
+| `/sessions new <name>` | Start a fresh named session |
+| `/sessions resume <name>` | Switch to a saved session |
+| `/sessions rename <old> <new>` | Rename a session |
+| `/sessions delete <name>` | Delete a session |
 | `/exit` | Exit |
 
 ---
@@ -276,5 +295,5 @@ Created by **Ravin D**
 
 ---
 
-**Version:** 0.1.0
+**Version:** 0.2.0
 **Status:** Actively maintained
