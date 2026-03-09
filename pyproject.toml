@@ -36,7 +36,7 @@ classifiers = [
   "Topic :: System :: System Shells",
   "Topic :: Terminals",
   "Topic :: Utilities",
-  "Topic :: Artificial Intelligence"
+  "Topic :: Scientific/Engineering :: Artificial Intelligence"
 ]
 
 dependencies = [
