@@ -1,114 +1,133 @@
 import os
-import sys
-import subprocess
 import platform
 import shutil
+import subprocess
+import sys
 import textwrap
+import uuid
 from pathlib import Path
 from typing import Optional, Tuple
-import google.generativeai as genai
+
+from google import genai
+from google.genai import types
 
 # For Markdown Response Rendering
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-# Import readline for better terminal input handling
-try:
-    import readline
-    READLINE_AVAILABLE = True
-except ImportError:
-    try:
-        import pyreadline3 as readline
-        READLINE_AVAILABLE = True
-    except ImportError:
-        print("⚠️  For better terminal experience, install: pip install pyreadline3")
-        READLINE_AVAILABLE = False
+# Import new agent system
+from . import config
+from .agent import list_modes, run_agent, test_providers
+from .api_manager import APIManager
+from .session_manager import SessionManager
+from .tui import CommandorPrompt
+
 
 class AITerminal:
     """An intelligent terminal that uses AI to convert natural language to shell commands."""
-    
+
     def __init__(self):
         # Initialize colors first - this is critical!
         self.colors = {
-            'red': '\033[91m',
-            'green': '\033[92m',
-            'yellow': '\033[93m',
-            'blue': '\033[94m',
-            'magenta': '\033[95m',
-            'cyan': '\033[96m',
-            'white': '\033[97m',
-            'reset': '\033[0m',
-            'bold': '\033[1m',
-            'bright_red': '\033[91m\033[1m',
-            'bright_green': '\033[92m\033[1m',
-            'bright_yellow': '\033[93m\033[1m',
-            'bright_blue': '\033[94m\033[1m',
-            'bright_magenta': '\033[95m\033[1m',
-            'bright_cyan': '\033[96m\033[1m'
+            "red": "\033[91m",
+            "green": "\033[92m",
+            "yellow": "\033[93m",
+            "blue": "\033[94m",
+            "magenta": "\033[95m",
+            "cyan": "\033[96m",
+            "white": "\033[97m",
+            "reset": "\033[0m",
+            "bold": "\033[1m",
+            "bright_red": "\033[91m\033[1m",
+            "bright_green": "\033[92m\033[1m",
+            "bright_yellow": "\033[93m\033[1m",
+            "bright_blue": "\033[94m\033[1m",
+            "bright_magenta": "\033[95m\033[1m",
+            "bright_cyan": "\033[96m\033[1m",
         }
-        
+
         # Initialize other attributes
         self.api_key = None
+        self.session_id = str(uuid.uuid4())
         self.current_dir = Path.cwd()
         self.command_history = []
         self.ask_history = []  # Dedicated history for /ask prompts
         self.max_history = 100
         self.max_ask_history = 50  # Separate limit for ask history
         self.system_info = self._get_system_info()
-        self.config_dir = Path.home() / '.commandor'
-        self.env_file = self.config_dir / '.env'
-        self.ask_history_file = self.config_dir / 'ask_history.txt'
+        self.config_dir = Path.home() / ".commandor"
+        self.env_file = self.config_dir / ".env"
+        self.ask_history_file = self.config_dir / "ask_history.txt"
         self.model = None  # Initialize model as None
-        
+
         # Initializing the Rich console
         self.console = Console()
-        
+
         # Ensure config directory exists
         try:
             self.config_dir.mkdir(exist_ok=True)
         except Exception as e:
             print(f"Warning: Could not create config directory: {e}")
-        
+
         # Setup API key
         self._setup_api_key()
-        
+
         # Configure Gemini only if we have an API key
         if self.api_key:
             try:
-                genai.configure(api_key=self.api_key)
-                self.model = genai.GenerativeModel("gemini-2.0-flash")
+                self.gemini_client = genai.Client(api_key=self.api_key)
+                self.model = "gemini-2.5-flash"
             except Exception as e:
                 print(f"Warning: Could not initialize Gemini model: {e}")
                 self.model = None
-        
+
         # Setup readline if available
         self._setup_readline()
-        
+
         # Load ask history
         self._load_ask_history()
-        
+
+        # API manager (for /api commands)
+        self._api_manager = APIManager()
+
+        # Session manager (for /sessions commands)
+        self._session_manager = SessionManager()
+        self._session_name: Optional[str] = None  # name of current session, if saved
+
+        # prompt_toolkit interactive prompt
+        self._prompt = CommandorPrompt(self.config_dir)
+        self._prompt.update_session(None, self.session_id)
+
     def _display_ai_response(self, response: str, title: str = "AI Response"):
         """Display AI response using rich library for better formatting."""
-        
+
         # Create markdown object
         markdown = Markdown(response)
-        
+
+        # Resolve current provider name for subtitle
+        try:
+            cfg = config.get_config()
+            provider_name = cfg.config.default_provider if cfg.config else "gemini"
+        except Exception:
+            provider_name = "gemini"
+        subtitle = f"Powered by {provider_name.capitalize()}"
+
         # Create a panel with the markdown content
         panel = Panel(
             markdown,
             title=f"🤖 {title}",
-            subtitle="Powered by Gemini",
+            subtitle=subtitle,
             border_style="cyan",
             padding=(1, 2),
-            expand=False
+            expand=False,
         )
-        
+
         self.console.print(panel)
 
     def reset_api_key(self):
         """Reset and reconfigure the API key."""
-        print(self._colorize("🔄 Resetting API key...", 'yellow'))
+        print(self._colorize("🔄 Resetting API key...", "yellow"))
         self.api_key = None
         self.model = None
         self._prompt_for_api_key()
@@ -116,43 +135,58 @@ class AITerminal:
     def test_api_key(self) -> bool:
         """Test if the current API key is valid."""
         if not self.api_key:
-            print(self._colorize("❌ No API key configured", 'red'))
+            print(self._colorize("❌ No API key configured", "red"))
             return False
-        
+
         try:
-            print(self._colorize("🔍 Testing API key...", 'yellow'))
-            genai.configure(api_key=self.api_key)
-            test_model = genai.GenerativeModel("gemini-2.0-flash")
-            test_response = test_model.generate_content("Hello")
+            print(self._colorize("🔍 Testing API key...", "yellow"))
+            client = genai.Client(api_key=self.api_key)
+            test_response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=["Hello"],
+                config=types.GenerateContentConfig(max_output_tokens=10),
+            )
             return test_response is not None
         except Exception as e:
-            print(self._colorize(f"❌ API key test failed: {str(e)}", 'red'))
+            print(self._colorize(f"❌ API key test failed: {str(e)}", "red"))
             return False
 
     def handle_api_error(self, error_message: str) -> bool:
         """Handle API errors and offer to reset API key."""
-        print(self._colorize(f"❌ API Error: {error_message}", 'red'))
-        
+        print(self._colorize(f"❌ API Error: {error_message}", "red"))
+
         # Check if it's likely an API key issue
-        api_error_keywords = ['api key', 'authentication', 'unauthorized', 'forbidden', 'invalid', 'quota', 'exceeded']
+        api_error_keywords = [
+            "api key",
+            "authentication",
+            "unauthorized",
+            "forbidden",
+            "invalid",
+            "quota",
+            "exceeded",
+        ]
         if any(keyword in error_message.lower() for keyword in api_error_keywords):
-            print(self._colorize("🔍 This looks like an API key issue.", 'yellow'))
-            
-            response = self.get_input(self._colorize("Would you like to reset your API key? (y/N): ", 'bright_cyan'))
-            if response.lower() == 'y':
+            print(self._colorize("🔍 This looks like an API key issue.", "yellow"))
+
+            response = self.get_input(
+                self._colorize(
+                    "Would you like to reset your API key? (y/N): ", "bright_cyan"
+                )
+            )
+            if response.lower() == "y":
                 self.reset_api_key()
                 return True
-        
+
         return False
 
     def ask_ai(self, question: str) -> str:
         """Ask AI a general question (not command-related) - Enhanced for rich markdown."""
-        
+
         if not self.api_key or not self.model:
             return "Error: No API key configured or model not initialized"
-        
+
         context = self._get_directory_context()
-        
+
         prompt = textwrap.dedent(f"""You are a helpful AI assistant. Answer the user's question with rich markdown formatting.
 
         Use these markdown features extensively:
@@ -170,20 +204,25 @@ class AITerminal:
         - Tables when appropriate
 
         SYSTEM CONTEXT (for reference only):
-        - OS: {self.system_info['os']}
+        - OS: {self.system_info["os"]}
         - Current Directory: {self.current_dir}
-        
+
         QUESTION: "{question}"
 
         Provide a comprehensive, well-structured answer with excellent markdown formatting.""")
 
         try:
-            response = self.model.generate_content(prompt)
-            return response.text.strip()
+            response = self.gemini_client.models.generate_content(
+                model=self.model,
+                contents=[prompt],
+                config=types.GenerateContentConfig(
+                    system_instruction="You are a helpful AI assistant."
+                ),
+            )
+            return response.text.strip() if response.text else ""
         except Exception as e:
             error_msg = str(e)
             if self.handle_api_error(error_msg):
-                # API key was reset, try again
                 return self.ask_ai(question)
             return f"Sorry, I couldn't process your question: {error_msg}"
 
@@ -192,134 +231,122 @@ class AITerminal:
         # Try to load from .env file first
         if self.env_file.exists():
             try:
-                with open(self.env_file, 'r') as f:
+                with open(self.env_file, "r") as f:
                     for line in f:
                         line = line.strip()
-                        if line.startswith('GEMINI='):
-                            self.api_key = line.split('=', 1)[1].strip().strip('"\'')
+                        if line.startswith("GEMINI="):
+                            self.api_key = line.split("=", 1)[1].strip().strip("\"'")
                             break
             except Exception as e:
                 print(f"Warning: Could not read .env file: {e}")
-        
+
         # If no API key found, prompt user
         if not self.api_key:
             self._prompt_for_api_key()
 
     def _prompt_for_api_key(self):
         """Prompt user for Gemini API key and save it."""
-        print(self._colorize('🔑 Gemini API Key Setup Required', 'bright_yellow'))
-        print(self._colorize('=' * 45, 'bright_blue'))
+        print(self._colorize("🔑 Gemini API Key Setup Required", "bright_yellow"))
+        print(self._colorize("=" * 45, "bright_blue"))
         print("To use Commandor, you need a Gemini API key.")
         print("You can get one free at: https://makersuite.google.com/app/apikey")
         print()
-        
+
         while True:
             try:
-                api_key = input(self._colorize("Please enter your Gemini API key: ", 'bright_cyan')).strip()
-                
+                api_key = input(
+                    self._colorize("Please enter your Gemini API key: ", "bright_cyan")
+                ).strip()
+
                 if not api_key:
-                    print(self._colorize("❌ API key cannot be empty. Please try again.", 'red'))
+                    print(
+                        self._colorize(
+                            "❌ API key cannot be empty. Please try again.", "red"
+                        )
+                    )
                     continue
-                
+
                 # Test the API key
-                print(self._colorize("🔍 Validating API key...", 'yellow'))
-                
+                print(self._colorize("🔍 Validating API key...", "yellow"))
+
                 try:
-                    genai.configure(api_key=api_key)
-                    test_model = genai.GenerativeModel("gemini-2.0-flash")
-                    test_response = test_model.generate_content("Hello")
-                    
+                    client = genai.Client(api_key=api_key)
+                    test_response = client.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=["Hello"],
+                        config=types.GenerateContentConfig(max_output_tokens=10),
+                    )
+
                     if test_response:
                         self.api_key = api_key
                         self._save_api_key()
-                        print(self._colorize("✅ API key validated and saved successfully!", 'bright_green'))
-                        self.model = test_model
+                        print(
+                            self._colorize(
+                                "✅ API key validated and saved successfully!",
+                                "bright_green",
+                            )
+                        )
+                        self.gemini_client = client
+                        self.model = "gemini-2.5-flash"
                         break
                     else:
-                        print(self._colorize("❌ Invalid API key. Please check and try again.", 'red'))
-                        
+                        print(
+                            self._colorize(
+                                "❌ Invalid API key. Please check and try again.", "red"
+                            )
+                        )
+
                 except Exception as e:
-                    print(self._colorize(f"❌ API key validation failed: {str(e)}", 'red'))
-                    print(self._colorize("Please check your API key and try again.", 'yellow'))
-                    
+                    print(
+                        self._colorize(f"❌ API key validation failed: {str(e)}", "red")
+                    )
+                    print(
+                        self._colorize(
+                            "Please check your API key and try again.", "yellow"
+                        )
+                    )
+
             except KeyboardInterrupt:
-                print(f"\n{self._colorize('❌ Setup cancelled. Commandor requires an API key to function.', 'red')}")
+                print(
+                    f"\n{self._colorize('❌ Setup cancelled. Commandor requires an API key to function.', 'red')}"
+                )
                 exit(1)
 
     def _save_api_key(self):
         """Save API key to .env file."""
         try:
-            with open(self.env_file, 'w') as f:
-                f.write(f'GEMINI={self.api_key}\n')
-            
+            with open(self.env_file, "w") as f:
+                f.write(f"GEMINI={self.api_key}\n")
+
             # Set file permissions to be readable only by owner
-            if os.name != 'nt':  # Not Windows
+            if os.name != "nt":  # Not Windows
                 os.chmod(self.env_file, 0o600)
-                
+
         except Exception as e:
             print(f"Warning: Could not save API key: {e}")
 
     def _get_system_info(self) -> dict:
         """Gather system information for better context."""
         return {
-            'os': platform.system(),
-            'os_version': platform.version(),
-            'architecture': platform.machine(),
-            'python_version': platform.python_version(),
-            'shell': os.environ.get('SHELL', 'unknown'),
-            'user': os.environ.get('USER', os.environ.get('USERNAME', 'unknown'))
+            "os": platform.system(),
+            "os_version": platform.version(),
+            "architecture": platform.machine(),
+            "python_version": platform.python_version(),
+            "shell": os.environ.get("SHELL", "unknown"),
+            "user": os.environ.get("USER", os.environ.get("USERNAME", "unknown")),
         }
 
     def _setup_readline(self):
-        """Setup readline for better terminal input experience."""
-        if not READLINE_AVAILABLE:
-            return
-        
-        # Set up history file
-        history_file = self.config_dir / 'history'
-        
-        try:
-            # Load existing history
-            if history_file.exists():
-                readline.read_history_file(str(history_file))
-            
-            # Set history length
-            readline.set_history_length(1000)
-            
-            # Enable tab completion for file paths
-            readline.set_completer_delims(' \t\n`!@#$%^&*()=+[{]}\\|;:\'",<>?')
-            readline.parse_and_bind("tab: complete")
-            
-            # Enable vi or emacs mode (emacs is default)
-            readline.parse_and_bind("set editing-mode emacs")
-            
-            # Configure better line wrapping behavior
-            readline.parse_and_bind("set horizontal-scroll-mode off")
-            readline.parse_and_bind("set disable-completion off")
-            
-            # Custom key bindings
-            readline.parse_and_bind("\\C-p: previous-history")  # Ctrl+P for previous
-            readline.parse_and_bind("\\C-n: next-history")     # Ctrl+N for next
-            
-            # Save history on exit
-            import atexit
-            atexit.register(lambda: self._save_history(history_file))
-            
-        except Exception as e:
-            print(f"Warning: Could not setup readline: {e}")
+        """No-op: readline replaced by prompt_toolkit (CommandorPrompt)."""
 
     def _save_history(self, history_file):
-        """Save command history to file."""
-        try:
-            readline.write_history_file(str(history_file))
-        except Exception as e:
-            print(f"Warning: Could not save history: {e}")
+        """No-op: history is managed by prompt_toolkit FileHistory."""
 
     def _load_ask_history(self):
         """Load ask prompt history from file."""
         try:
             if self.ask_history_file.exists():
-                with open(self.ask_history_file, 'r', encoding='utf-8') as f:
+                with open(self.ask_history_file, "r", encoding="utf-8") as f:
                     for line in f:
                         line = line.strip()
                         if line:
@@ -330,7 +357,7 @@ class AITerminal:
     def _save_ask_history(self):
         """Save ask prompt history to file."""
         try:
-            with open(self.ask_history_file, 'w', encoding='utf-8') as f:
+            with open(self.ask_history_file, "w", encoding="utf-8") as f:
                 for prompt in self.ask_history:
                     f.write(f"{prompt}\n")
         except Exception as e:
@@ -339,52 +366,63 @@ class AITerminal:
     def show_ask_history(self):
         """Display ask prompt history."""
         if not self.ask_history:
-            print(self._colorize("🤔 No ask history available", 'yellow'))
+            print(self._colorize("🤔 No ask history available", "yellow"))
             return
-        
-        print(self._colorize(f"📝 Ask History ({len(self.ask_history)} total):", 'bold'))
-        print(self._colorize('-' * 40, 'bright_magenta'))
+
+        print(
+            self._colorize(f"📝 Ask History ({len(self.ask_history)} total):", "bold")
+        )
+        print(self._colorize("-" * 40, "bright_magenta"))
         for i, prompt in enumerate(self.ask_history[-15:], 1):
             # Truncate long prompts for display
             display_prompt = prompt if len(prompt) <= 60 else prompt[:57] + "..."
             print(f"{self._colorize(f'{i:2d}.', 'bright_cyan')} {display_prompt}")
-        
+
         if len(self.ask_history) > 15:
-            print(f"{self._colorize(f'... and {len(self.ask_history) - 15} more', 'yellow')}")
-        
-        print(f"\n{self._colorize('💡 Tip:', 'bright_yellow')} Use '/ask-search <term>' to search your ask history")
-    
+            print(
+                f"{self._colorize(f'... and {len(self.ask_history) - 15} more', 'yellow')}"
+            )
+
+        print(
+            f"\n{self._colorize('💡 Tip:', 'bright_yellow')} Use '/ask-search <term>' to search your ask history"
+        )
+
     def search_ask_history(self, search_term: str):
         """Search ask history for a specific term."""
         if not self.ask_history:
-            print(self._colorize("🤔 No ask history to search", 'yellow'))
+            print(self._colorize("🤔 No ask history to search", "yellow"))
             return
-        
+
         search_term_lower = search_term.lower()
         matches = []
-        
+
         for i, prompt in enumerate(self.ask_history):
             if search_term_lower in prompt.lower():
                 matches.append((i + 1, prompt))
-        
+
         if not matches:
-            print(self._colorize(f"🔍 No matches found for '{search_term}'", 'yellow'))
+            print(self._colorize(f"🔍 No matches found for '{search_term}'", "yellow"))
             return
-        
-        print(self._colorize(f"🔍 Found {len(matches)} match(es) for '{search_term}':", 'bold'))
-        print(self._colorize('-' * 50, 'bright_green'))
+
+        print(
+            self._colorize(
+                f"🔍 Found {len(matches)} match(es) for '{search_term}':", "bold"
+            )
+        )
+        print(self._colorize("-" * 50, "bright_green"))
         for index, prompt in matches:
             # Highlight the search term in the result
             highlighted_prompt = prompt.replace(
-                search_term, 
-                self._colorize(search_term, 'bright_yellow')
+                search_term, self._colorize(search_term, "bright_yellow")
             )
-            print(f"{self._colorize(f'{index:2d}.', 'bright_cyan')} {highlighted_prompt}")
+            print(
+                f"{self._colorize(f'{index:2d}.', 'bright_cyan')} {highlighted_prompt}"
+            )
 
     def _colorize(self, text: str, color: str) -> str:
         """Apply color to text."""
         try:
-            if hasattr(self, 'colors') and self.colors:
+            if hasattr(self, "colors") and self.colors:
                 return f"{self.colors.get(color, '')}{text}{self.colors['reset']}"
             else:
                 return text
@@ -394,13 +432,13 @@ class AITerminal:
     def _display_colorful_logo(self):
         """Display colorful Commandor logo."""
         logo = f"""
-{self._colorize('╔═══════════════════════════════════════════════════════════════╗', 'bright_cyan')}
-{self._colorize('║', 'bright_cyan')}  {self._colorize('█▀▀ █▀█ █▀▄▀█ █▀▄▀█ █▀█ █▄░█ █▀▄ █▀█ █▀█', 'bright_magenta')}  {self._colorize('║', 'bright_cyan')}
-{self._colorize('║', 'bright_cyan')}  {self._colorize('█▄▄ █▄█ █░▀░█ █░▀░█ █▄█ █░▀█ █▄▀ █▄█ █▀▄', 'bright_blue')}  {self._colorize('║', 'bright_cyan')}
-{self._colorize('║', 'bright_cyan')}                                                             {self._colorize('║', 'bright_cyan')}
-{self._colorize('║', 'bright_cyan')}    {self._colorize('🤖 Your AI-Powered Terminal Assistant 🤖', 'bright_yellow')}        {self._colorize('║', 'bright_cyan')}
-{self._colorize('║', 'bright_cyan')}           {self._colorize('Speak naturally, execute powerfully!', 'bright_green')}       {self._colorize('║', 'bright_cyan')}
-{self._colorize('╚═══════════════════════════════════════════════════════════════╝', 'bright_cyan')}
+{self._colorize("╔═══════════════════════════════════════════════════════════════╗", "bright_cyan")}
+{self._colorize("║", "bright_cyan")}  {self._colorize("█▀▀ █▀█ █▀▄▀█ █▀▄▀█ █▀█ █▄░█ █▀▄ █▀█ █▀█", "bright_magenta")}  {self._colorize("║", "bright_cyan")}
+{self._colorize("║", "bright_cyan")}  {self._colorize("█▄▄ █▄█ █░▀░█ █░▀░█ █▄█ █░▀█ █▄▀ █▄█ █▀▄", "bright_blue")}  {self._colorize("║", "bright_cyan")}
+{self._colorize("║", "bright_cyan")}                                                             {self._colorize("║", "bright_cyan")}
+{self._colorize("║", "bright_cyan")}    {self._colorize("🤖 Your AI-Powered Terminal Assistant 🤖", "bright_yellow")}        {self._colorize("║", "bright_cyan")}
+{self._colorize("║", "bright_cyan")}           {self._colorize("Speak naturally, execute powerfully!", "bright_green")}       {self._colorize("║", "bright_cyan")}
+{self._colorize("╚═══════════════════════════════════════════════════════════════╝", "bright_cyan")}
         """
         print(logo)
 
@@ -409,19 +447,19 @@ class AITerminal:
         try:
             files = []
             dirs = []
-            
+
             for item in sorted(self.current_dir.iterdir())[:10]:
                 if item.is_file():
                     files.append(item.name)
                 elif item.is_dir():
                     dirs.append(item.name)
-            
+
             context = f"Current directory: {self.current_dir}\n"
             if dirs:
                 context += f"Directories: {', '.join(dirs[:5])}\n"
             if files:
                 context += f"Files: {', '.join(files[:5])}\n"
-                
+
             return context
         except PermissionError:
             return f"Current directory: {self.current_dir} (limited access)\n"
@@ -430,7 +468,7 @@ class AITerminal:
         """Get recent command history for context."""
         if not self.command_history:
             return ""
-        
+
         recent = self.command_history[-3:]
         return "Recent commands:\n" + "\n".join([f"  {cmd}" for cmd in recent]) + "\n"
 
@@ -438,17 +476,17 @@ class AITerminal:
         """Convert natural language instruction to shell command using AI."""
         if not self.api_key or not self.model:
             return "# Error: No API key configured or model not initialized"
-        
+
         context = self._get_directory_context()
         recent_commands = self._get_recent_commands()
-        
+
         prompt = f"""You are an expert system administrator helping convert natural language to shell commands.
 
         SYSTEM INFORMATION:
-        - OS: {self.system_info['os']} {self.system_info['os_version']}
-        - Architecture: {self.system_info['architecture']}
-        - Shell: {self.system_info['shell']}
-        - User: {self.system_info['user']}
+        - OS: {self.system_info["os"]} {self.system_info["os_version"]}
+        - Architecture: {self.system_info["architecture"]}
+        - Shell: {self.system_info["shell"]}
+        - User: {self.system_info["user"]}
 
         CURRENT CONTEXT:
         {context}
@@ -459,7 +497,7 @@ class AITerminal:
 
         RULES:
         1. Reply with ONLY the shell command, no explanations
-        2. Use commands appropriate for {self.system_info['os']}
+        2. Use commands appropriate for {self.system_info["os"]}
         3. Consider the current directory context
         4. Use safe commands (avoid destructive operations without explicit confirmation)
         5. For file operations, use relative paths when possible
@@ -468,13 +506,19 @@ class AITerminal:
         Command:"""
 
         try:
-            response = self.model.generate_content(prompt)
-            command = response.text.strip()
-            
-            if command.startswith('```'):
-                lines = command.split('\n')
-                command = '\n'.join(lines[1:-1]) if len(lines) > 2 else lines[1]
-            
+            response = self.gemini_client.models.generate_content(
+                model=self.model,
+                contents=[prompt],
+                config=types.GenerateContentConfig(
+                    system_instruction="You are an expert system administrator helping convert natural language to shell commands."
+                ),
+            )
+            command = response.text.strip() if response.text else ""
+
+            if command.startswith("```"):
+                lines = command.split("\n")
+                command = "\n".join(lines[1:-1]) if len(lines) > 2 else lines[1]
+
             return command.strip()
         except Exception as e:
             error_msg = str(e)
@@ -486,21 +530,21 @@ class AITerminal:
     def execute_command(self, command: str) -> Tuple[bool, str, str]:
         """Execute a shell command and return success status and output."""
         try:
-            if command.strip().startswith('cd '):
+            if command.strip().startswith("cd "):
                 return self._handle_cd_command(command)
-            
+
             result = subprocess.run(
                 command,
                 shell=True,
                 cwd=str(self.current_dir),
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30,
             )
-            
+
             success = result.returncode == 0
             return success, result.stdout, result.stderr
-            
+
         except subprocess.TimeoutExpired:
             return False, "", "Command timed out after 30 seconds"
         except Exception as e:
@@ -509,16 +553,16 @@ class AITerminal:
     def _handle_cd_command(self, command: str) -> Tuple[bool, str, str]:
         """Handle cd commands to update current directory."""
         parts = command.strip().split(maxsplit=1)
-        
+
         if len(parts) == 1:
             target = Path.home()
         else:
-            path = parts[1].strip('\'"')
+            path = parts[1].strip("'\"")
             target = Path(path)
-            
+
             if not target.is_absolute():
                 target = self.current_dir / target
-        
+
         try:
             resolved_target = target.resolve()
             if resolved_target.exists() and resolved_target.is_dir():
@@ -533,14 +577,14 @@ class AITerminal:
     def display_output(self, success: bool, stdout: str, stderr: str):
         """Display command output with appropriate formatting."""
         if stdout:
-            print(stdout, end='')
-        
+            print(stdout, end="")
+
         if stderr:
-            print(self._colorize(stderr, 'red'), end='')
-        
+            print(self._colorize(stderr, "red"), end="")
+
         if not success and not stderr:
-            print(self._colorize("Command failed", 'red'))
-        
+            print(self._colorize("Command failed", "red"))
+
         # Always add newline after any command output to ensure prompt appears on new line
         # This prevents text overlapping issues when the next prompt is displayed
         print()
@@ -553,106 +597,131 @@ class AITerminal:
             dir_display = f".../{'/'.join(path_parts[-2:])}"
         else:
             dir_display = str(self.current_dir)
-        
+
         if len(dir_display) > 30:
             dir_display = "..." + dir_display[-27:]
-        
+
         return f"{self._colorize('Commandor', 'bright_cyan')} {self._colorize(f'[{dir_display}]', 'bright_blue')} {self._colorize('# ', 'bright_yellow')}"
 
     def show_help(self):
         """Display help information."""
         help_text = f"""
-        {self._colorize('🚀 Commandor Help Guide 🚀', 'bold')}
-        {self._colorize('=' * 60, 'bright_blue')}
+        {self._colorize("🚀 Commandor Help Guide 🚀", "bold")}
+        {self._colorize("=" * 60, "bright_blue")}
 
-        {self._colorize('Special Commands:', 'bright_green')}
-        {self._colorize('/ai <instruction>', 'bright_cyan')}  - Convert natural language to shell command
-        {self._colorize('/ask <question>', 'bright_magenta')}   - Ask AI any question directly
-        {self._colorize('/help', 'yellow')}             - Show this help message
-        {self._colorize('/info', 'yellow')}             - Show system information
-        {self._colorize('/history', 'yellow')}          - Show recent command history
-        {self._colorize('/ask-history', 'yellow')}      - Show your question history
-        {self._colorize('/ask-search <term>', 'yellow')} - Search your question history
-        {self._colorize('/clear', 'yellow')}            - Clear the screen
-        {self._colorize('/config', 'yellow')}           - Show configuration info
-        {self._colorize('/reset-api', 'yellow')}        - Reset and reconfigure API key
-        {self._colorize('/test-api', 'yellow')}         - Test current API key
-        {self._colorize('exit', 'red')} or {self._colorize('Ctrl+C', 'red')}       - Exit the terminal
+        {self._colorize("Agent Commands:", "bright_green")}
+        {self._colorize("/agent <task>", "bright_cyan")}    - Run autonomous agent
+        {self._colorize("/assist <task>", "bright_cyan")}   - Run with confirmations
+        {self._colorize("/plan <task>", "bright_cyan")}     - Plan then execute (review before run)
+        {self._colorize("/chat <question>", "bright_magenta")} - Ask AI questions
 
-        {self._colorize('AI Command Examples:', 'bright_yellow')}
-        {self._colorize('/ai', 'bright_cyan')} list all python files
-        {self._colorize('/ai', 'bright_cyan')} create a new directory called projects
-        {self._colorize('/ai', 'bright_cyan')} find files larger than 100MB
-        {self._colorize('/ai', 'bright_cyan')} show disk usage
-        {self._colorize('/ai', 'bright_cyan')} install package using pip
+        {self._colorize("Traditional Commands:", "bright_green")}
+        {self._colorize("/ai <instruction>", "bright_cyan")}  - Convert natural language to shell command
+        {self._colorize("/ask <question>", "bright_magenta")}   - Ask AI any question directly
+        {self._colorize("/help", "yellow")}             - Show this help message
+        {self._colorize("/info", "yellow")}             - Show system information
+        {self._colorize("/history", "yellow")}          - Show recent command history
+        {self._colorize("/ask-history", "yellow")}      - Show your question history
+        {self._colorize("/ask-search <term>", "yellow")} - Search your question history
+        {self._colorize("/clear", "yellow")}            - Clear the screen
+        {self._colorize("/config", "yellow")}           - Show configuration info
+        {self._colorize("/reset-api", "yellow")}        - Reset and reconfigure API key
+        {self._colorize("/test-api", "yellow")}         - Test current API key
 
-        {self._colorize('Ask AI Examples:', 'bright_yellow')}
-        {self._colorize('/ask', 'bright_magenta')} What is the difference between Python and JavaScript?
-        {self._colorize('/ask', 'bright_magenta')} How do I optimize my code for better performance?
-        {self._colorize('/ask', 'bright_magenta')} Explain machine learning concepts
-        {self._colorize('/ask', 'bright_magenta')} What are best practices for Git workflow?
+        {self._colorize("Provider Commands:", "bright_green")}
+        {self._colorize("/provider <name>", "yellow")}    - Switch AI provider
+        {self._colorize("/providers", "yellow")}          - List available providers
+        {self._colorize("/modes", "yellow")}              - Show agent modes
 
-        {self._colorize('API Management:', 'bright_yellow')}
-        {self._colorize('/reset-api', 'yellow')}         - Change your API key
-        {self._colorize('/test-api', 'yellow')}          - Verify API key is working
+        {self._colorize("API Management:", "bright_green")}
+        {self._colorize("/api", "yellow")}                   - Show API key status table
+        {self._colorize("/api set <provider> <key>", "yellow")}  - Set API key for a provider
+        {self._colorize("/api model <provider> <model>", "yellow")} - Set default model for a provider
+        {self._colorize("/api test [provider]", "yellow")}   - Test one or all providers
+        {self._colorize("/api remove <provider>", "yellow")} - Remove a provider's API key
+        {self._colorize("/api default <provider>", "yellow")} - Set default provider
+        {self._colorize("/test-providers", "yellow")}        - Quick test of all providers
 
-        {self._colorize('Ask History Examples:', 'bright_yellow')}
-        {self._colorize('/ask-history', 'yellow')}       - View your recent questions
-        {self._colorize('/ask-search python', 'yellow')} - Find questions about Python
-        {self._colorize('/ask-search debug', 'yellow')}  - Find debugging-related questions
+        {self._colorize("Session Management:", "bright_green")}
+        {self._colorize("/sessions", "yellow")}                        - List saved sessions
+        {self._colorize("/sessions save <name>", "yellow")}            - Name the current session
+        {self._colorize("/sessions new <name>", "yellow")}             - Start a fresh named session
+        {self._colorize("/sessions resume <name>", "yellow")}          - Switch to a saved session
+        {self._colorize("/sessions rename <old> <new>", "yellow")}     - Rename a session
+        {self._colorize("/sessions delete <name>", "yellow")}          - Delete a session
 
-        {self._colorize('💡 Regular shell commands work too!', 'bright_green')}
+        {self._colorize("exit", "red")} or {self._colorize("Ctrl+C", "red")}       - Exit the terminal
+
+        {self._colorize("Agent Mode Examples:", "bright_yellow")}
+        {self._colorize("/agent", "bright_cyan")} fix the bug in main.py
+        {self._colorize("/plan", "bright_cyan")} add tests for auth module
+        {self._colorize("/assist", "bright_cyan")} create a new feature
+
+        {self._colorize("API Management Examples:", "bright_yellow")}
+        {self._colorize("/api set gemini", "yellow")} AIzaSy...
+        {self._colorize("/api model openai", "yellow")} gpt-4o
+        {self._colorize("/api default anthropic", "yellow")}
+        {self._colorize("/api test", "yellow")}
+
+        {self._colorize("💡 Regular shell commands work too!", "bright_green")}
         """
         print(help_text)
 
     def show_info(self):
         """Display system information."""
         info_text = f"""
-        {self._colorize('🖥️  System Information', 'bold')}
-        {self._colorize('=' * 35, 'bright_blue')}
-        {self._colorize('OS:', 'bright_cyan')} {self.system_info['os']} {self.system_info['os_version']}
-        {self._colorize('Architecture:', 'bright_cyan')} {self.system_info['architecture']}
-        {self._colorize('Python:', 'bright_cyan')} {self.system_info['python_version']}
-        {self._colorize('Shell:', 'bright_cyan')} {self.system_info['shell']}
-        {self._colorize('User:', 'bright_cyan')} {self.system_info['user']}
-        {self._colorize('Current Directory:', 'bright_cyan')} {self.current_dir}
+        {self._colorize("🖥️  System Information", "bold")}
+        {self._colorize("=" * 35, "bright_blue")}
+        {self._colorize("OS:", "bright_cyan")} {self.system_info["os"]} {self.system_info["os_version"]}
+        {self._colorize("Architecture:", "bright_cyan")} {self.system_info["architecture"]}
+        {self._colorize("Python:", "bright_cyan")} {self.system_info["python_version"]}
+        {self._colorize("Shell:", "bright_cyan")} {self.system_info["shell"]}
+        {self._colorize("User:", "bright_cyan")} {self.system_info["user"]}
+        {self._colorize("Current Directory:", "bright_cyan")} {self.current_dir}
         """
         print(info_text)
 
     def show_config(self):
         """Display configuration information."""
         config_text = f"""
-        {self._colorize('⚙️  Configuration', 'bold')}
-        {self._colorize('=' * 25, 'bright_blue')}
-        {self._colorize('Config Directory:', 'bright_cyan')} {self.config_dir}
-        {self._colorize('API Key Status:', 'bright_cyan')} {'✅ Configured' if self.api_key else '❌ Not configured'}
-        {self._colorize('Model Status:', 'bright_cyan')} {'✅ Initialized' if self.model else '❌ Not initialized'}
-        {self._colorize('Readline Support:', 'bright_cyan')} {'✅ Available' if READLINE_AVAILABLE else '❌ Not available'}
-        {self._colorize('API Key File:', 'bright_cyan')} {self.env_file}
-        {self._colorize('Ask History File:', 'bright_cyan')} {self.ask_history_file}
+        {self._colorize("⚙️  Configuration", "bold")}
+        {self._colorize("=" * 25, "bright_blue")}
+        {self._colorize("Config Directory:", "bright_cyan")} {self.config_dir}
+        {self._colorize("API Key Status:", "bright_cyan")} {"✅ Configured" if self.api_key else "❌ Not configured"}
+        {self._colorize("Model Status:", "bright_cyan")} {"✅ Initialized" if self.model else "❌ Not initialized"}
+        {self._colorize("Input Mode:", "bright_cyan")} ✅ prompt_toolkit
+        {self._colorize("API Key File:", "bright_cyan")} {self.env_file}
+        {self._colorize("Ask History File:", "bright_cyan")} {self.ask_history_file}
         """
         print(config_text)
 
     def show_history(self):
         """Display recent command history."""
         if not self.command_history:
-            print(self._colorize("📝 No command history available", 'yellow'))
+            print(self._colorize("📝 No command history available", "yellow"))
             return
-        
-        print(self._colorize("📚 Recent Commands:", 'bold'))
-        print(self._colorize('-' * 25, 'bright_blue'))
+
+        print(self._colorize("📚 Recent Commands:", "bold"))
+        print(self._colorize("-" * 25, "bright_blue"))
         for i, cmd in enumerate(self.command_history[-10:], 1):
             print(f"{self._colorize(f'{i:2d}.', 'bright_cyan')} {cmd}")
 
     def add_to_history(self, command: str):
         """Add command to history."""
-        if command and command not in ['exit', '/help', '/info', '/history', '/clear', '/config', '/ask-history', '/reset-api', '/test-api']:
+        if command and command not in [
+            "exit",
+            "/help",
+            "/info",
+            "/history",
+            "/clear",
+            "/config",
+            "/ask-history",
+            "/reset-api",
+            "/test-api",
+        ]:
             self.command_history.append(command)
             if len(self.command_history) > self.max_history:
                 self.command_history.pop(0)
-            
-            if READLINE_AVAILABLE:
-                readline.add_history(command)
 
     def add_to_ask_history(self, prompt: str):
         """Add ask prompt to ask history."""
@@ -673,147 +742,488 @@ class AITerminal:
             return user_input
         except EOFError:
             raise KeyboardInterrupt
-        
+
     def run(self):
         """Main terminal loop."""
         if not self.api_key or not self.model:
-            print(self._colorize("❌ Cannot start Commandor without API key or model initialization.", 'red'))
+            print(
+                self._colorize(
+                    "❌ Cannot start Commandor without API key or model initialization.",
+                    "red",
+                )
+            )
             return
-        
+
         self._display_colorful_logo()
-        
-        if READLINE_AVAILABLE:
-            print(f"✨ {self._colorize('Enhanced input mode active!', 'bright_green')}")
-        else:
-            print("⚠️  Basic input mode (install 'readline' or 'pyreadline3' for better experience)")
-        
-        print(f"Type {self._colorize('/help', 'bright_cyan')} for commands or {self._colorize('Ctrl+C', 'bright_yellow')} to exit.")
-        print(f"Use {self._colorize('/ai', 'bright_cyan')} for commands or {self._colorize('/ask', 'bright_magenta')} for questions!")
+
+        print(f"✨ {self._colorize('Interactive mode active (prompt_toolkit)', 'bright_green')}")
+
+        print(
+            f"Type {self._colorize('/help', 'bright_cyan')} for commands or {self._colorize('Ctrl+C', 'bright_yellow')} to exit."
+        )
+        print(
+            f"Use {self._colorize('/ai', 'bright_cyan')} for commands or {self._colorize('/ask', 'bright_magenta')} for questions!"
+        )
         print()
 
         while True:
             try:
-                user_input = self.get_input(self.get_prompt())
-                
+                user_input = self._prompt.get_input(self.get_prompt())
+
                 if not user_input:
                     continue
-                
-                if user_input == 'exit':
+
+                if user_input == "exit":
                     break
-                elif user_input == '/help':
+                elif user_input == "/help":
                     self.show_help()
                     continue
-                elif user_input == '/info':
+                elif user_input == "/info":
                     self.show_info()
                     continue
-                elif user_input == '/config':
+                elif user_input == "/config":
                     self.show_config()
                     continue
-                elif user_input == '/history':
+                elif user_input == "/history":
                     self.show_history()
                     continue
-                elif user_input == '/ask-history':
+                elif user_input == "/ask-history":
                     self.show_ask_history()
                     continue
-                elif user_input.startswith('/ask-search '):
+                elif user_input.startswith("/ask-search "):
                     search_term = user_input[12:].strip()
                     if not search_term:
-                        print(self._colorize("🔍 Please provide a search term after /ask-search", 'yellow'))
+                        print(
+                            self._colorize(
+                                "🔍 Please provide a search term after /ask-search",
+                                "yellow",
+                            )
+                        )
                         continue
                     self.search_ask_history(search_term)
                     continue
-                elif user_input == '/clear':
-                    os.system('clear' if os.name != 'nt' else 'cls')
+                elif user_input == "/clear":
+                    os.system("clear" if os.name != "nt" else "cls")
                     continue
-                elif user_input == '/reset-api':
+                elif user_input == "/reset-api":
                     self.reset_api_key()
                     continue
-                elif user_input == '/test-api':
+                elif user_input == "/test-api":
                     if self.test_api_key():
-                        print(self._colorize("✅ API key is working correctly!", 'bright_green'))
+                        print(
+                            self._colorize(
+                                "✅ API key is working correctly!", "bright_green"
+                            )
+                        )
                     else:
-                        print(self._colorize("❌ API key test failed", 'red'))
+                        print(self._colorize("❌ API key test failed", "red"))
                     continue
-                
-                elif user_input.startswith('/ask '):
+
+                elif user_input.startswith("/ask "):
                     question = user_input[5:].strip()
                     if not question:
-                        print(self._colorize("❓ Please provide a question after /ask", 'yellow'))
+                        print(
+                            self._colorize(
+                                "❓ Please provide a question after /ask", "yellow"
+                            )
+                        )
                         continue
-                    
+
                     # Check if API key and model are still valid
                     if not self.api_key or not self.model:
-                        print(self._colorize("❌ API key or model not available. Use /reset-api to reconfigure.", 'red'))
+                        print(
+                            self._colorize(
+                                "❌ API key or model not available. Use /reset-api to reconfigure.",
+                                "red",
+                            )
+                        )
                         continue
-                    
+
                     # Add question to ask history before processing
                     self.add_to_ask_history(question)
-                    
-                    print(self._colorize("🤔 Thinking...", 'yellow'), flush=True)
+
+                    print(self._colorize("🤔 Thinking...", "yellow"), flush=True)
                     ai_response = self.ask_ai(question)
-                    
+
                     # Check if there was an API error that couldn't be resolved
-                    if ai_response.startswith("Error:") or ai_response.startswith("Sorry,"):
-                        print(self._colorize(ai_response, 'red'))
+                    if ai_response.startswith("Error:") or ai_response.startswith(
+                        "Sorry,"
+                    ):
+                        print(self._colorize(ai_response, "red"))
                     else:
                         # Use the enhanced display instead of simple print
                         self._display_ai_response(ai_response, "AI Response")
-                    
+
                     self.add_to_history(f"/ask {question}")
                     continue
-                
-                elif user_input.startswith('/ai '):
+
+                elif user_input.startswith("/ai "):
                     instruction = user_input[4:].strip()
                     if not instruction:
-                        print(self._colorize("💡 Please provide an instruction after /ai", 'yellow'))
+                        print(
+                            self._colorize(
+                                "💡 Please provide an instruction after /ai", "yellow"
+                            )
+                        )
                         continue
-                    
+
                     # Check if API key and model are still valid
                     if not self.api_key or not self.model:
-                        print(self._colorize("❌ API key or model not available. Use /reset-api to reconfigure.", 'red'))
+                        print(
+                            self._colorize(
+                                "❌ API key or model not available. Use /reset-api to reconfigure.",
+                                "red",
+                            )
+                        )
                         continue
-                    
-                    print(self._colorize("🧠 Generating command...", 'yellow'), flush=True)
+
+                    print(
+                        self._colorize("🧠 Generating command...", "yellow"), flush=True
+                    )
                     ai_command = self.get_ai_command(instruction)
-                    
+
                     # Check if there was an API error
                     if ai_command.startswith("# Error"):
-                        print(self._colorize(ai_command, 'red'))
+                        print(self._colorize(ai_command, "red"))
                         continue
-                    
-                    print(f"{self._colorize('🤖 AI →', 'bright_green')} {self._colorize(ai_command, 'bright_blue')}")
-                    
+
+                    print(
+                        f"{self._colorize('🤖 AI →', 'bright_green')} {self._colorize(ai_command, 'bright_blue')}"
+                    )
+
                     # Safety check for dangerous commands
-                    dangerous_patterns = ['rm -rf', 'sudo rm', 'format', 'mkfs', '> /dev/', 'dd if=']
-                    if any(pattern in ai_command.lower() for pattern in dangerous_patterns):
-                        confirm = self.get_input(self._colorize("⚠️  This command looks dangerous. Execute? (y/N): ", 'bright_yellow'))
-                        if confirm.lower() != 'y':
-                            print(self._colorize("❌ Command cancelled", 'yellow'))
+                    dangerous_patterns = [
+                        "rm -rf",
+                        "sudo rm",
+                        "format",
+                        "mkfs",
+                        "> /dev/",
+                        "dd if=",
+                    ]
+                    if any(
+                        pattern in ai_command.lower() for pattern in dangerous_patterns
+                    ):
+                        confirm = self.get_input(
+                            self._colorize(
+                                "⚠️  This command looks dangerous. Execute? (y/N): ",
+                                "bright_yellow",
+                            )
+                        )
+                        if confirm.lower() != "y":
+                            print(self._colorize("❌ Command cancelled", "yellow"))
                             continue
-                    
+
                     success, stdout, stderr = self.execute_command(ai_command)
                     self.display_output(success, stdout, stderr)
                     self.add_to_history(f"/ai {instruction} → {ai_command}")
-                
+
+                elif user_input.startswith("/agent "):
+                    task = user_input[7:].strip()
+                    if not task:
+                        print(
+                            self._colorize(
+                                "❓ Please provide a task after /agent", "yellow"
+                            )
+                        )
+                        continue
+
+                    print(
+                        self._colorize(
+                            f"\n🚀 Running autonomous agent...", "bright_green"
+                        )
+                    )
+                    result = run_agent(task, mode="agent", thread_id=self.session_id)
+
+                    if not result.success:
+                        print(self._colorize(f"❌ {result.final_answer}", "red"))
+
+                    if result.metrics:
+                        self._prompt.update_metrics(**result.metrics)
+                    self.add_to_history(f"/agent {task}")
+                    if self._session_name:
+                        self._session_manager.update_last_used(self._session_name)
+                    continue
+
+                elif user_input.startswith("/assist "):
+                    task = user_input[8:].strip()
+                    if not task:
+                        print(
+                            self._colorize(
+                                "❓ Please provide a task after /assist", "yellow"
+                            )
+                        )
+                        continue
+
+                    print(
+                        self._colorize(f"\n🔧 Running assist mode...", "bright_yellow")
+                    )
+                    result = run_agent(task, mode="assist", thread_id=self.session_id)
+
+                    if not result.success:
+                        print(self._colorize(f"❌ {result.final_answer}", "red"))
+
+                    if result.metrics:
+                        self._prompt.update_metrics(**result.metrics)
+                    self.add_to_history(f"/assist {task}")
+                    if self._session_name:
+                        self._session_manager.update_last_used(self._session_name)
+                    continue
+
+                elif user_input.startswith("/plan "):
+                    task = user_input[6:].strip()
+                    if not task:
+                        print(
+                            self._colorize(
+                                "❓ Please provide a task after /plan", "yellow"
+                            )
+                        )
+                        continue
+
+                    print(
+                        self._colorize(
+                            f"\n📋 Running plan mode — generating plan first...",
+                            "bright_cyan",
+                        )
+                    )
+                    result = run_agent(task, mode="plan", thread_id=self.session_id)
+
+                    if not result.success:
+                        print(self._colorize(f"❌ {result.final_answer}", "red"))
+
+                    if result.metrics:
+                        self._prompt.update_metrics(**result.metrics)
+                    self.add_to_history(f"/plan {task}")
+                    if self._session_name:
+                        self._session_manager.update_last_used(self._session_name)
+                    continue
+
+                elif user_input.startswith("/chat "):
+                    question = user_input[6:].strip()
+                    if not question:
+                        print(
+                            self._colorize(
+                                "❓ Please provide a question after /chat", "yellow"
+                            )
+                        )
+                        continue
+
+                    print(self._colorize(f"\n💬 Thinking...", "bright_cyan"))
+                    result = run_agent(question, mode="chat", thread_id=self.session_id)
+
+                    if not result.success:
+                        print(self._colorize(f"❌ {result.final_answer}", "red"))
+
+                    if result.metrics:
+                        self._prompt.update_metrics(**result.metrics)
+                    self.add_to_history(f"/chat {question}")
+                    if self._session_name:
+                        self._session_manager.update_last_used(self._session_name)
+                    continue
+
+                elif user_input == "/providers":
+                    print(self._colorize("\n📋 Available Providers:", "bold"))
+                    cfg = config.get_config()
+                    for name in cfg.get_enabled_providers():
+                        pconfig = cfg.get_provider_config(name)
+                        status = "✅" if pconfig and pconfig.api_key else "❌"
+                        model = pconfig.default_model if pconfig else ""
+                        print(f"  {status} {name}: {model}")
+                    continue
+
+                elif user_input == "/modes":
+                    print(self._colorize("\n📋 Agent Modes:", "bold"))
+                    modes = list_modes()
+                    for name, desc in modes.items():
+                        print(f"  • {name}: {desc}")
+                    continue
+
+                elif user_input.startswith("/provider "):
+                    provider_name = user_input[10:].strip()
+                    if not provider_name:
+                        print(self._colorize("❓ Please specify a provider", "yellow"))
+                        continue
+
+                    cfg = config.get_config()
+                    cfg.set_default_provider(provider_name)
+                    print(
+                        self._colorize(
+                            f"✅ Default provider set to: {provider_name}",
+                            "bright_green",
+                        )
+                    )
+                    continue
+
+                elif user_input == "/setup":
+                    config.setup_interactive()
+                    continue
+
+                elif user_input.startswith("/test-providers"):
+                    print(self._colorize("\n🔍 Testing providers...", "bright_yellow"))
+                    results = test_providers()
+                    for name, result in results.items():
+                        if result["status"] == "ok":
+                            print(
+                                self._colorize(f"  ✅ {name}: Working", "bright_green")
+                            )
+                        elif result["status"] == "no_api_key":
+                            print(self._colorize(f"  ⚠️  {name}: No API key", "yellow"))
+                        elif result["status"] == "invalid_key":
+                            print(
+                                self._colorize(f"  ❌ {name}: Invalid API key", "red")
+                            )
+                        else:
+                            print(
+                                self._colorize(
+                                    f"  ❌ {name}: {result.get('error', 'Unknown error')}",
+                                    "red",
+                                )
+                            )
+                    continue
+
+                elif user_input == "/api":
+                    self._api_manager.show_status()
+                    continue
+
+                elif user_input.startswith("/api set "):
+                    parts = user_input[9:].strip().split(maxsplit=1)
+                    if len(parts) < 2:
+                        print(
+                            self._colorize(
+                                "Usage: /api set <provider> <key>", "yellow"
+                            )
+                        )
+                        continue
+                    self._api_manager.set_key(parts[0], parts[1])
+                    continue
+
+                elif user_input.startswith("/api model "):
+                    parts = user_input[11:].strip().split(maxsplit=1)
+                    if len(parts) < 2:
+                        print(
+                            self._colorize(
+                                "Usage: /api model <provider> <model>", "yellow"
+                            )
+                        )
+                        continue
+                    self._api_manager.set_model(parts[0], parts[1])
+                    continue
+
+                elif user_input.startswith("/api test"):
+                    arg = user_input[9:].strip()
+                    if arg:
+                        self._api_manager.test_provider(arg)
+                    else:
+                        self._api_manager.test_all()
+                    continue
+
+                elif user_input.startswith("/api remove "):
+                    provider = user_input[12:].strip()
+                    self._api_manager.remove_key(provider)
+                    continue
+
+                elif user_input.startswith("/api default "):
+                    provider = user_input[13:].strip()
+                    self._api_manager.set_default(provider)
+                    continue
+
+                elif user_input == "/sessions":
+                    self._session_manager.show_sessions(current_id=self.session_id)
+                    continue
+
+                elif user_input.startswith("/sessions save "):
+                    name = user_input[15:].strip()
+                    if not name:
+                        print(self._colorize("Usage: /sessions save <name>", "yellow"))
+                        continue
+                    self._session_manager.save_session(name, self.session_id)
+                    self._session_name = name
+                    self._prompt.update_session(name, session_id=self.session_id)
+                    continue
+
+                elif user_input.startswith("/sessions new "):
+                    name = user_input[14:].strip()
+                    if not name:
+                        print(self._colorize("Usage: /sessions new <name>", "yellow"))
+                        continue
+                    new_id = self._session_manager.new_session(name)
+                    if new_id:
+                        self.session_id = new_id
+                        self._session_name = name
+                        self._prompt.update_session(name, session_id=self.session_id)
+                    continue
+
+                elif user_input.startswith("/sessions resume "):
+                    name = user_input[17:].strip()
+                    if not name:
+                        print(
+                            self._colorize("Usage: /sessions resume <name>", "yellow")
+                        )
+                        continue
+                    resumed_id = self._session_manager.resume_session(name)
+                    if resumed_id:
+                        self.session_id = resumed_id
+                        self._session_name = name
+                        self._prompt.update_session(name, session_id=self.session_id)
+                    continue
+
+                elif user_input.startswith("/sessions rename "):
+                    parts = user_input[17:].strip().split(maxsplit=1)
+                    if len(parts) < 2:
+                        print(
+                            self._colorize(
+                                "Usage: /sessions rename <old> <new>", "yellow"
+                            )
+                        )
+                        continue
+                    self._session_manager.rename_session(parts[0], parts[1])
+                    if self._session_name == parts[0]:
+                        self._session_name = parts[1]
+                        self._prompt.update_session(parts[1], session_id=self.session_id)
+                    continue
+
+                elif user_input.startswith("/sessions delete "):
+                    name = user_input[17:].strip()
+                    if not name:
+                        print(
+                            self._colorize(
+                                "Usage: /sessions delete <name>", "yellow"
+                            )
+                        )
+                        continue
+                    self._session_manager.delete_session(
+                        name, current_id=self.session_id
+                    )
+                    continue
+
                 else:
                     # Regular shell command
                     success, stdout, stderr = self.execute_command(user_input)
                     self.display_output(success, stdout, stderr)
                     self.add_to_history(user_input)
-                    
+
             except KeyboardInterrupt:
-                print(f"\n{self._colorize('👋 Goodbye! Thanks for using Commandor!', 'bright_green')}")
+                print(
+                    f"\n{self._colorize('👋 Goodbye! Thanks for using Commandor!', 'bright_green')}"
+                )
                 break
             except EOFError:
-                print(f"\n{self._colorize('👋 Goodbye! Thanks for using Commandor!', 'bright_green')}")
+                print(
+                    f"\n{self._colorize('👋 Goodbye! Thanks for using Commandor!', 'bright_green')}"
+                )
                 break
             except Exception as e:
                 print(f"💥 Unexpected error: {e}")
                 # Add some debugging info
                 import traceback
+
                 print(f"Error details: {traceback.format_exc()}")
                 # Offer to reset API if it might be an API-related error
                 if "api" in str(e).lower() or "model" in str(e).lower():
-                    response = self.get_input(self._colorize("This might be an API issue. Reset API key? (y/N): ", 'bright_cyan'))
-                    if response.lower() == 'y':
+                    response = self.get_input(
+                        self._colorize(
+                            "This might be an API issue. Reset API key? (y/N): ",
+                            "bright_cyan",
+                        )
+                    )
+                    if response.lower() == "y":
                         self.reset_api_key()

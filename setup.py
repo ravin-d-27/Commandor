@@ -1,12 +1,12 @@
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
     name="commandor-ai",
-    version="0.0.1",
-    description="An intelligent terminal assistant that uses AI to convert natural language to shell commands",
+    version="0.2.0",
+    description="Agentic CLI - Autonomous coding assistant",
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="Ravin D",
@@ -19,27 +19,34 @@ setup(
     },
     packages=find_packages(),
     install_requires=[
-        "google-generativeai>=0.3.0",
-        "python-decouple>=3.6",
+        "google-genai>=1.0.0",
+        "anthropic>=0.40.0",
+        "openai>=1.0.0",
+        "httpx>=0.27.0",
+        "rich>=13.0.0",
+        "pyyaml>=6.0",
+        "python-dotenv>=1.0.0",
         "pyreadline3>=3.4.1; platform_system=='Windows'",
-        "colorama>=0.4.4",  # For cross-platform colored output
-        "rich>=10.0.0,<14.0.0",
+        "langchain-core>=1.2.0",
+        "langgraph>=1.0.0",
+        "langchain-google-genai>=4.2.0",
+        "langchain-anthropic>=1.3.0",
+        "langchain-openai>=1.1.0",
+        "prompt_toolkit>=3.0.0",
     ],
     entry_points={
         "console_scripts": [
-            "commandor=commandor.main:main",
+            "commandor=commandor.__main__:main",
         ],
     },
-    python_requires=">=3.7",
+    python_requires=">=3.9",
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
         "Intended Audience :: System Administrators",
-        "License :: Free for non-commercial use",
+        "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
@@ -49,6 +56,7 @@ setup(
         "Topic :: System :: System Shells",
         "Topic :: Terminals",
         "Topic :: Utilities",
+        "Topic :: Artificial Intelligence",
     ],
     keywords=[
         "terminal",
@@ -57,10 +65,14 @@ setup(
         "command-line",
         "natural-language",
         "gemini",
+        "claude",
+        "gpt",
         "assistant",
         "automation",
         "cli",
         "productivity",
+        "agent",
+        "opencode",
     ],
     include_package_data=True,
     zip_safe=False,
