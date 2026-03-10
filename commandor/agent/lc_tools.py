@@ -18,15 +18,41 @@ from ..utils.diff_display import display_diff
 # ---------------------------------------------------------------------------
 
 @tool
-def read_file_tool(path: str, limit: Optional[int] = None) -> str:
-    """Read the contents of a file.
+def read_file_tool(path: str, onset: int = 0, offset: Optional[int] = None) -> str:
+    """Read the contents of a file, with optional line range selection.
+
+    Lines are 0-indexed.  To read the **first 10 lines** pass onset=0, offset=9.
+    To read lines 20–29 pass onset=20, offset=29.
+    To read from line 50 to the end of file pass onset=50 (omit offset).
 
     Args:
-        path: Absolute or relative path to the file.
-        limit: Optional maximum number of lines to return.
+        path:   Absolute or relative path to the file.
+        onset:  First line to read, 0-indexed (default 0 = start of file).
+        offset: Last line to read, 0-indexed **inclusive** (default = end of file).
     """
     try:
-        return file_ops.read_file(path, limit)
+        p = Path(path)
+        if not p.exists():
+            return f"Error: File not found: {path}"
+        if not p.is_file():
+            return f"Error: Not a file: {path}"
+
+        try:
+            with open(p, "r", encoding="utf-8") as fh:
+                all_lines = fh.readlines()
+        except UnicodeDecodeError:
+            return f"<Binary file: {path}>"
+
+        total = len(all_lines)
+        start = max(0, onset)
+        end   = (min(offset + 1, total) if offset is not None else total)
+        selected = all_lines[start:end]
+
+        header = ""
+        if start > 0 or end < total:
+            header = f"[Lines {start}–{end - 1} of {total} total]\n"
+
+        return header + "".join(selected)
     except (FileNotFoundError, ValueError, OSError) as e:
         return f"Error: {e}"
 
@@ -39,9 +65,17 @@ def read_file_tool(path: str, limit: Optional[int] = None) -> str:
 def write_file_tool(path: str, content: str) -> str:
     """Write content to a file, creating parent directories as needed.
 
+    Overwrites the file if it already exists. Use edit_file_tool for surgical
+    changes to existing files (preserves unchanged lines).
+
+    Always use a path relative to the current working directory OR an absolute
+    path. Do NOT accidentally write to the wrong directory — use cd_tool first
+    to navigate to the project root if unsure.
+
     Args:
         path: Absolute or relative path to the file to write.
-        content: Full content to write to the file.
+        content: Full content to write to the file. Must be the complete file
+                 content (not a diff or partial update).
     """
     # Capture old content before overwriting
     try:
@@ -62,11 +96,17 @@ def edit_file_tool(path: str, old: str, new: str) -> str:
     """Edit a file by replacing an exact string with a new string.
 
     The first occurrence of `old` in the file will be replaced with `new`.
-    Make sure `old` is unique enough to identify the correct location.
+    Preferred over write_file_tool for targeted changes — it's safer and
+    shows a precise diff.
+
+    Tips for reliable use:
+    - Include enough surrounding context lines in `old` to make it unique
+    - Match whitespace and indentation exactly as it appears in the file
+    - Read the file first with read_file_tool if unsure of exact content
 
     Args:
         path: Path to the file to edit.
-        old: The exact text to find and replace (must exist in the file).
+        old: The exact text to find and replace (must exist verbatim in the file).
         new: The replacement text.
     """
     # Capture old content before editing
@@ -163,9 +203,15 @@ def patch_file_tool(path: str, diff: str) -> str:
 def glob_tool(pattern: str, path: str = ".") -> str:
     """Find files matching a glob pattern.
 
+    Use this to discover the structure of a project before reading files.
+    Common patterns:
+    - '**/*.py'   — all Python files recursively
+    - '*.ts'      — TypeScript files in the current directory only
+    - 'src/**/*'  — everything under src/
+
     Args:
         pattern: Glob pattern such as '**/*.py' or '*.ts'.
-        path: Directory to search in (defaults to current directory).
+        path: Directory to search in (defaults to current working directory).
     """
     try:
         return file_ops.glob_files(pattern, path)
@@ -175,12 +221,15 @@ def glob_tool(pattern: str, path: str = ".") -> str:
 
 @tool
 def grep_tool(pattern: str, path: str = ".", file_pattern: str = "*") -> str:
-    """Search for a regex pattern inside files.
+    """Search for a regex pattern inside file contents.
+
+    Use this to find where a function, class, variable, or string is defined
+    or referenced across a project.
 
     Args:
-        pattern: Regular expression to search for.
-        path: Directory to search in (defaults to current directory).
-        file_pattern: Glob pattern to filter which files are searched (e.g. '*.py').
+        pattern: Regular expression to search for (e.g. 'def my_func', 'TODO', 'import os').
+        path: Directory to search in (defaults to current working directory).
+        file_pattern: Glob pattern to filter files (e.g. '*.py', '*.ts', '*.json').
     """
     try:
         return file_ops.search_in_files(pattern, path, file_pattern)
@@ -190,10 +239,13 @@ def grep_tool(pattern: str, path: str = ".", file_pattern: str = "*") -> str:
 
 @tool
 def list_directory_tool(path: str = ".") -> str:
-    """List the contents of a directory.
+    """List the contents of a directory (files and subdirectories).
+
+    Use this to explore the project structure before reading files.
+    Useful as a first step when starting work in an unfamiliar directory.
 
     Args:
-        path: Directory path to list (defaults to current directory).
+        path: Directory path to list (defaults to current working directory).
     """
     try:
         return file_ops.list_directory(path)
@@ -203,13 +255,19 @@ def list_directory_tool(path: str = ".") -> str:
 
 @tool
 def run_command_tool(command: str, timeout: int = 60) -> str:
-    """Run a shell command and return its output.
+    """Run a shell command and return its combined stdout+stderr output.
 
-    Use this to run tests, build tools, git commands, package managers, etc.
-    Avoid commands that require interactive input.
+    Use for: running tests, builds, git commands, package managers (pip/npm/cargo),
+    creating directories (mkdir -p), checking installed tools, etc.
+
+    Tips:
+    - Create a new directory before writing files into it: run_command_tool('mkdir -p /path/to/dir')
+    - Use absolute paths or ensure you've cd_tool'd to the right directory first
+    - Avoid commands needing interactive input (e.g. passwd, vim, less)
+    - For long-running processes (servers, watchers), use a short timeout and note the PID
 
     Args:
-        command: Shell command to execute.
+        command: Shell command to execute (runs in the current working directory).
         timeout: Maximum seconds to wait before giving up (default 60).
     """
     return shell.run_command(command, timeout=timeout)
@@ -219,6 +277,28 @@ def run_command_tool(command: str, timeout: int = 60) -> str:
 def get_directory_tool() -> str:
     """Get the current working directory path."""
     return shell.get_working_directory()
+
+
+@tool
+def cd_tool(path: str) -> str:
+    """Change the current working directory.
+
+    Use this BEFORE starting any work in a project to navigate to the correct
+    folder. All subsequent file reads, writes, and shell commands will operate
+    relative to the new directory.
+
+    After changing directory, confirm the new CWD by calling get_directory_tool().
+
+    IMPORTANT: Do NOT create project files in the Commandor tool's own directory.
+    Always cd into a dedicated project folder first (create it with run_command_tool
+    if it doesn't exist), then do your work there.
+
+    Args:
+        path: Directory to navigate to. Supports absolute paths (/home/user/project),
+              relative paths (my_project, ../sibling), and ~ for home directory.
+              Examples: '/tmp/my_app', '~/projects/website', '..', 'src'
+    """
+    return shell.change_directory(path)
 
 
 @tool
@@ -259,6 +339,7 @@ ALL_TOOLS = [
     list_directory_tool,
     run_command_tool,
     get_directory_tool,
+    cd_tool,
     get_project_files_tool,
     get_git_info_tool,
     get_environment_tool,

@@ -20,20 +20,23 @@ Commandor is an **Agentic CLI** (similar to OpenCode or Codex CLI) that uses AI 
 - **`/plan`** - Plan mode: Generate plan first, then execute (review before run)
 - **`/chat`** - Chat mode: Ask questions without executing actions
 
+### Intelligent Context
+- **`@filepath` References** - Inline file contents directly into your prompts (e.g., `/agent review @src/main.py`)
+- **Session Management** - Save, resume, and manage multiple task sessions with automatic naming
+- **Real-time Metrics** - Track token usage and estimated costs directly in your terminal prompt
+
 ### Multi-Provider Support
-- **Google Gemini** - gemini-2.5-flash, gemini-1.5-pro
+- **Google Gemini** - gemini-2.0-flash, gemini-1.5-pro
 - **Anthropic Claude** - claude-3.5-sonnet, claude-3-opus
-- **OpenAI GPT** - gpt-4o, gpt-4-turbo, gpt-3.5-turbo
+- **OpenAI GPT** - gpt-4o, gpt-4-turbo
 - **OpenRouter** - Access to 100+ models
 
 ### Tools
-- **File Operations**: Read, Write, Edit files
+- **File Operations**: Read, Write, Edit, and **Patch** files with unified diffs
 - **Search**: Glob, Grep for finding files and content
-- **Shell**: Run commands, list directories
+- **Shell**: Run commands, list directories, change directories
 - **Project**: Git info, project files, environment info
-- **Session Management**: Save, resume, and manage sessions
-- **API Management**: Configure providers and models
-- **Rich Markdown Rendering**: AI responses with enhanced formatting
+- **Rich Markdown Rendering**: AI responses with enhanced formatting and diff displays
 
 ---
 
@@ -111,7 +114,7 @@ commandor --chat "what is async/await in Python?"
 | `/agent <task>` | Run autonomous agent |
 | `/assist <task>` | Run with confirmations |
 | `/plan <task>` | Plan then execute (review before run) |
-| `/chat <question>` | Ask AI questions |
+| `/chat <question>` | Ask AI questions (no tools) |
 | `/ai <instruction>` | Convert natural language to shell command |
 | `/ask <question>` | Ask AI any question directly |
 | `/provider <name>` | Switch AI provider |
@@ -154,7 +157,7 @@ default_provider: openrouter
 providers:
   gemini:
     enabled: true
-    default_model: gemini-2.5-flash
+    default_model: gemini-2.0-flash
   
   anthropic:
     enabled: true  
@@ -177,17 +180,18 @@ agent:
 
 ## Examples
 
+### Agent Mode with @ References
+```bash
+# Provide file content directly to the agent
+commandor > /agent refactor this code: @src/utils.py
+commandor > /agent write tests for @app/models.py using pytest
+```
+
 ### Agent Mode Examples
 ```bash
 commandor > /agent fix all TypeScript errors in src/
 commandor > /agent add error handling to auth.py
 commandor > /agent create a README.md for this project
-```
-
-### Assist Mode Examples
-```bash
-commandor > /assist create a new React component
-commandor > /assist refactor this function
 ```
 
 ### Shell Commands
@@ -223,23 +227,25 @@ commandor/
 │   ├── __main__.py       # CLI entry point
 │   ├── main.py           # Legacy entry
 │   ├── terminal.py       # Interactive terminal
+│   ├── tui.py            # Rich UI components
 │   ├── config.py         # Configuration management
+│   ├── api_manager.py    # API key and model management
+│   ├── session_manager.py # Session persistence
 │   ├── providers/        # AI providers
-│   │   ├── base.py
-│   │   ├── factory.py
-│   │   ├── gemini.py
-│   │   ├── anthropic.py
-│   │   ├── openai.py
-│   │   └── openrouter.py
-│   ├── agent/            # Agent system
-│   │   ├── agent.py
-│   │   ├── tools.py
-│   │   ├── modes.py
-│   │   ├── executor.py
-│   │   └── prompts.py
+│   │   ├── __init__.py
+│   │   └── base.py
+│   ├── agent/            # Agent system (LangGraph based)
+│   │   ├── __init__.py
+│   │   ├── executor.py   # Agent execution logic
+│   │   ├── lc_graph.py   # LangGraph definition
+│   │   ├── lc_models.py  # Model factory
+│   │   ├── lc_tools.py   # Tool definitions
+│   │   └── modes.py      # Agent mode definitions
 │   └── utils/           # Utilities
+│       ├── __init__.py
 │       ├── file_ops.py
-│       └── shell.py
+│       ├── shell.py
+│       └── diff_display.py # Rich diff rendering
 ├── pyproject.toml
 ├── setup.py
 └── README.md

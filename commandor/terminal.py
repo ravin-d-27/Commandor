@@ -1,5 +1,6 @@
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from google.genai import types
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.table import Table
 
 # Import new agent system
 from . import config
@@ -94,6 +96,7 @@ class AITerminal:
         # Session manager (for /sessions commands)
         self._session_manager = SessionManager()
         self._session_name: Optional[str] = None  # name of current session, if saved
+        self._autosave_declined: bool = False       # don't re-ask if user skipped once
 
         # prompt_toolkit interactive prompt
         self._prompt = CommandorPrompt(self.config_dir)
@@ -430,17 +433,23 @@ class AITerminal:
             return text
 
     def _display_colorful_logo(self):
-        """Display colorful Commandor logo."""
-        logo = f"""
-{self._colorize("╔═══════════════════════════════════════════════════════════════╗", "bright_cyan")}
-{self._colorize("║", "bright_cyan")}  {self._colorize("█▀▀ █▀█ █▀▄▀█ █▀▄▀█ █▀█ █▄░█ █▀▄ █▀█ █▀█", "bright_magenta")}  {self._colorize("║", "bright_cyan")}
-{self._colorize("║", "bright_cyan")}  {self._colorize("█▄▄ █▄█ █░▀░█ █░▀░█ █▄█ █░▀█ █▄▀ █▄█ █▀▄", "bright_blue")}  {self._colorize("║", "bright_cyan")}
-{self._colorize("║", "bright_cyan")}                                                             {self._colorize("║", "bright_cyan")}
-{self._colorize("║", "bright_cyan")}    {self._colorize("🤖 Your AI-Powered Terminal Assistant 🤖", "bright_yellow")}        {self._colorize("║", "bright_cyan")}
-{self._colorize("║", "bright_cyan")}           {self._colorize("Speak naturally, execute powerfully!", "bright_green")}       {self._colorize("║", "bright_cyan")}
-{self._colorize("╚═══════════════════════════════════════════════════════════════╝", "bright_cyan")}
-        """
-        print(logo)
+        """Display clean startup banner."""
+        try:
+            cfg = config.get_config()
+            provider_name = cfg.config.default_provider if cfg.config else "gemini"
+        except Exception:
+            provider_name = "gemini"
+
+        self.console.print()
+        self.console.print(
+            f"  [bold purple]◆[/bold purple]  [bold]Commandor[/bold]  [dim]— AI-powered terminal[/dim]"
+        )
+        self.console.print()
+        self.console.print(
+            f"  [dim]provider:[/dim] [cyan]{provider_name}[/cyan]"
+            f"  [dim]·  type [bold]/help[/bold] for commands  ·  Ctrl+C to exit[/dim]"
+        )
+        self.console.print()
 
     def _get_directory_context(self) -> str:
         """Get context about the current directory."""
@@ -589,83 +598,197 @@ class AITerminal:
         # This prevents text overlapping issues when the next prompt is displayed
         print()
 
+    def _expand_at_references(self, text: str) -> str:
+        """Replace ``@filepath`` tokens with inlined file-content blocks.
+
+        For example, ``/agent review @src/main.py`` becomes:
+
+            /agent review
+            <file path="src/main.py" lines="42">
+            ...file contents...
+            </file>
+
+        Paths are resolved relative to the current working directory.
+        Supports ``~`` expansion and absolute paths.
+        """
+        import re
+
+        def _replace(match: re.Match) -> str:  # type: ignore[type-arg]
+            raw = match.group(1)
+            p = Path(raw).expanduser()
+            if not p.is_absolute():
+                p = self.current_dir / p
+            try:
+                content = p.read_text(encoding="utf-8")
+                line_count = content.count("\n") + (0 if content.endswith("\n") else 1)
+                return (
+                    f'\n<file path="{raw}" lines="{line_count}">\n'
+                    f"{content}\n</file>"
+                )
+            except Exception as exc:
+                return f"@{raw}  [could not read: {exc}]"
+
+        # Match @word, @path/to/file.py, @./relative, @~/home-rel, @/absolute
+        # Don't match inside email-style tokens (preceded by alnum)
+        return re.sub(r"(?<![A-Za-z0-9])@([\w./~-]+)", _replace, text)
+
     def get_prompt(self) -> str:
-        """Generate the terminal prompt."""
-        # Show last 2 directories for better context
-        path_parts = self.current_dir.parts
-        if len(path_parts) > 2:
-            dir_display = f".../{'/'.join(path_parts[-2:])}"
-        else:
-            dir_display = str(self.current_dir)
+        """Generate the terminal prompt: dim path + bold purple ❯"""
+        try:
+            home = str(Path.home())
+            cwd = str(self.current_dir)
+            if cwd.startswith(home):
+                cwd = "~" + cwd[len(home):]
+        except Exception:
+            cwd = str(self.current_dir)
 
-        if len(dir_display) > 30:
-            dir_display = "..." + dir_display[-27:]
+        # ANSI: dim (2m) for path, reset, bold purple (1;35m) for ❯, reset
+        DIM    = "\033[2m"
+        RESET  = "\033[0m"
+        BOLD_PURPLE = "\033[1;35m"
 
-        return f"{self._colorize('Commandor', 'bright_cyan')} {self._colorize(f'[{dir_display}]', 'bright_blue')} {self._colorize('# ', 'bright_yellow')}"
+        return f"  {DIM}{cwd}{RESET} {BOLD_PURPLE}❯{RESET} "
 
     def show_help(self):
-        """Display help information."""
-        help_text = f"""
-        {self._colorize("🚀 Commandor Help Guide 🚀", "bold")}
-        {self._colorize("=" * 60, "bright_blue")}
+        """Display help information using Rich tables."""
+        console = Console()
 
-        {self._colorize("Agent Commands:", "bright_green")}
-        {self._colorize("/agent <task>", "bright_cyan")}    - Run autonomous agent
-        {self._colorize("/assist <task>", "bright_cyan")}   - Run with confirmations
-        {self._colorize("/plan <task>", "bright_cyan")}     - Plan then execute (review before run)
-        {self._colorize("/chat <question>", "bright_magenta")} - Ask AI questions
+        def _section(title: str, rows: list[tuple[str, str]]) -> Table:
+            t = Table(show_header=False, box=None, padding=(0, 2), expand=False)
+            t.add_column("command", style="cyan", no_wrap=True)
+            t.add_column("description", style="white")
+            for cmd, desc in rows:
+                t.add_row(cmd, desc)
+            return t
 
-        {self._colorize("Traditional Commands:", "bright_green")}
-        {self._colorize("/ai <instruction>", "bright_cyan")}  - Convert natural language to shell command
-        {self._colorize("/ask <question>", "bright_magenta")}   - Ask AI any question directly
-        {self._colorize("/help", "yellow")}             - Show this help message
-        {self._colorize("/info", "yellow")}             - Show system information
-        {self._colorize("/history", "yellow")}          - Show recent command history
-        {self._colorize("/ask-history", "yellow")}      - Show your question history
-        {self._colorize("/ask-search <term>", "yellow")} - Search your question history
-        {self._colorize("/clear", "yellow")}            - Clear the screen
-        {self._colorize("/config", "yellow")}           - Show configuration info
-        {self._colorize("/reset-api", "yellow")}        - Reset and reconfigure API key
-        {self._colorize("/test-api", "yellow")}         - Test current API key
+        console.print()
+        console.print(Panel(
+            "[bold cyan]Commandor[/bold cyan]  —  AI-powered terminal",
+            border_style="cyan",
+            padding=(0, 2),
+            expand=False,
+        ))
 
-        {self._colorize("Provider Commands:", "bright_green")}
-        {self._colorize("/provider <name>", "yellow")}    - Switch AI provider
-        {self._colorize("/providers", "yellow")}          - List available providers
-        {self._colorize("/modes", "yellow")}              - Show agent modes
+        console.print("\n[bold green]Agent Commands[/bold green]")
+        console.print(_section("agent", [
+            ("/agent <task>",   "Run fully autonomous agent"),
+            ("/assist <task>",  "Run with per-tool confirmations"),
+            ("/plan <task>",    "Generate plan, review, then execute"),
+            ("/chat <question>","Conversational AI (no tools)"),
+        ]))
 
-        {self._colorize("API Management:", "bright_green")}
-        {self._colorize("/api", "yellow")}                   - Show API key status table
-        {self._colorize("/api set <provider> <key>", "yellow")}  - Set API key for a provider
-        {self._colorize("/api model <provider> <model>", "yellow")} - Set default model for a provider
-        {self._colorize("/api test [provider]", "yellow")}   - Test one or all providers
-        {self._colorize("/api remove <provider>", "yellow")} - Remove a provider's API key
-        {self._colorize("/api default <provider>", "yellow")} - Set default provider
-        {self._colorize("/test-providers", "yellow")}        - Quick test of all providers
+        console.print("\n[bold green]Traditional Commands[/bold green]")
+        console.print(_section("traditional", [
+            ("/ai <instruction>",  "Convert natural language to shell command"),
+            ("/ask <question>",    "Ask AI a general question"),
+            ("/help",              "Show this help"),
+            ("/info",              "Show system information"),
+            ("/history",           "Show recent command history"),
+            ("/ask-history",       "Show question history"),
+            ("/ask-search <term>", "Search question history"),
+            ("/clear",             "Clear the screen"),
+            ("/config",            "Show configuration info"),
+            ("/reset-api",         "Reset and reconfigure API key"),
+            ("/test-api",          "Test current API key"),
+        ]))
 
-        {self._colorize("Session Management:", "bright_green")}
-        {self._colorize("/sessions", "yellow")}                        - List saved sessions
-        {self._colorize("/sessions save <name>", "yellow")}            - Name the current session
-        {self._colorize("/sessions new <name>", "yellow")}             - Start a fresh named session
-        {self._colorize("/sessions resume <name>", "yellow")}          - Switch to a saved session
-        {self._colorize("/sessions rename <old> <new>", "yellow")}     - Rename a session
-        {self._colorize("/sessions delete <name>", "yellow")}          - Delete a session
+        console.print("\n[bold green]Provider Commands[/bold green]")
+        console.print(_section("providers", [
+            ("/provider <name>",  "Switch AI provider"),
+            ("/providers",        "List available providers"),
+            ("/modes",            "Show agent modes"),
+        ]))
 
-        {self._colorize("exit", "red")} or {self._colorize("Ctrl+C", "red")}       - Exit the terminal
+        console.print("\n[bold green]API Management[/bold green]")
+        console.print(_section("api", [
+            ("/api",                         "Show API key status table"),
+            ("/api set <provider> <key>",     "Set API key for a provider"),
+            ("/api model <provider> <model>", "Set default model for a provider"),
+            ("/api test [provider]",          "Test one or all providers"),
+            ("/api remove <provider>",        "Remove a provider's API key"),
+            ("/api default <provider>",       "Set default provider"),
+            ("/test-providers",               "Quick test of all providers"),
+        ]))
 
-        {self._colorize("Agent Mode Examples:", "bright_yellow")}
-        {self._colorize("/agent", "bright_cyan")} fix the bug in main.py
-        {self._colorize("/plan", "bright_cyan")} add tests for auth module
-        {self._colorize("/assist", "bright_cyan")} create a new feature
+        console.print("\n[bold green]Session Management[/bold green]")
+        console.print(_section("sessions", [
+            ("/sessions",                      "List saved sessions"),
+            ("/sessions save <name>",          "Name the current session"),
+            ("/sessions new <name>",           "Start a fresh named session"),
+            ("/sessions resume <name>",        "Switch to a saved session"),
+            ("/sessions rename <old> <new>",   "Rename a session"),
+            ("/sessions delete <name>",        "Delete a session"),
+        ]))
 
-        {self._colorize("API Management Examples:", "bright_yellow")}
-        {self._colorize("/api set gemini", "yellow")} AIzaSy...
-        {self._colorize("/api model openai", "yellow")} gpt-4o
-        {self._colorize("/api default anthropic", "yellow")}
-        {self._colorize("/api test", "yellow")}
+        console.print(
+            "\n[dim]exit[/dim] or [dim]Ctrl+C[/dim] to quit  ·  "
+            "[dim]Regular shell commands work too[/dim]\n"
+        )
 
-        {self._colorize("💡 Regular shell commands work too!", "bright_green")}
+    def _maybe_autosave_session(self, task: str) -> None:
+        """Before the first run of an unsaved session, offer to save with an AI-generated name.
+
+        - Makes a quick LLM call to produce a 2–4 word kebab-case slug.
+        - Prompts: Save session as "<slug>"? [Enter=yes / type to rename / n=skip]:
+        - On confirm/rename: saves + updates toolbar.
+        - On 'n': sets self._autosave_declined so we don't ask again this session.
         """
-        print(help_text)
+        if self._session_name is not None or self._autosave_declined:
+            return
+
+        # Generate a slug via a quick LLM call
+        try:
+            from .agent.executor import _resolve_provider_model  # noqa: PLC0415
+            from .agent.lc_models import build_model              # noqa: PLC0415
+            from langchain_core.messages import HumanMessage      # noqa: PLC0415
+
+            _, api_key, resolved_model = _resolve_provider_model(None, None)
+            cfg_obj = config.get_config()
+            provider_name = cfg_obj.config.default_provider if cfg_obj.config else "gemini"
+            llm = build_model(provider_name, api_key, resolved_model)
+            prompt = (
+                "Generate a 2-4 word kebab-case session name for this task. "
+                "Reply with ONLY the slug, no explanation, no punctuation.\n\n"
+                f"Task: {task[:200]}"
+            )
+            resp = llm.invoke([HumanMessage(content=prompt)])
+            raw_content = resp.content if hasattr(resp, "content") else str(resp)
+            if isinstance(raw_content, list):
+                raw_content = " ".join(
+                    b.get("text", "") if isinstance(b, dict) else str(b)
+                    for b in raw_content
+                )
+            raw = str(raw_content)
+            # Sanitize: keep only alphanumeric + hyphens, collapse multiple hyphens
+            slug = re.sub(r"[^a-z0-9-]", "-", raw.strip().lower())
+            slug = re.sub(r"-+", "-", slug).strip("-")[:40]
+            if not slug:
+                return
+        except Exception:
+            return  # If LLM fails, silently skip autosave
+
+        try:
+            answer = input(
+                f'  Save session as "{slug}"? [Enter=yes / type to rename / n=skip]: '
+            ).strip()
+        except (KeyboardInterrupt, EOFError):
+            self._autosave_declined = True
+            return
+
+        if answer.lower() == "n":
+            self._autosave_declined = True
+            return
+
+        # Use provided rename if non-empty, otherwise use slug
+        final_name = answer if answer and answer.lower() != "n" else slug
+        # Sanitize custom name too
+        final_name = re.sub(r"[^a-z0-9_-]", "-", final_name.lower()).strip("-")[:40]
+        if not final_name:
+            final_name = slug
+
+        self._session_manager.save_session(final_name, self.session_id)
+        self._session_name = final_name
+        self._prompt.update_session(final_name, session_id=self.session_id)
 
     def show_info(self):
         """Display system information."""
@@ -755,16 +878,6 @@ class AITerminal:
             return
 
         self._display_colorful_logo()
-
-        print(f"✨ {self._colorize('Interactive mode active (prompt_toolkit)', 'bright_green')}")
-
-        print(
-            f"Type {self._colorize('/help', 'bright_cyan')} for commands or {self._colorize('Ctrl+C', 'bright_yellow')} to exit."
-        )
-        print(
-            f"Use {self._colorize('/ai', 'bright_cyan')} for commands or {self._colorize('/ask', 'bright_magenta')} for questions!"
-        )
-        print()
 
         while True:
             try:
@@ -927,12 +1040,12 @@ class AITerminal:
                         )
                         continue
 
-                    print(
-                        self._colorize(
-                            f"\n🚀 Running autonomous agent...", "bright_green"
-                        )
+                    self._maybe_autosave_session(task)
+                    result = run_agent(
+                        self._expand_at_references(task), mode="agent",
+                        thread_id=self.session_id,
+                        session_name=self._session_name,
                     )
-                    result = run_agent(task, mode="agent", thread_id=self.session_id)
 
                     if not result.success:
                         print(self._colorize(f"❌ {result.final_answer}", "red"))
@@ -954,10 +1067,12 @@ class AITerminal:
                         )
                         continue
 
-                    print(
-                        self._colorize(f"\n🔧 Running assist mode...", "bright_yellow")
+                    self._maybe_autosave_session(task)
+                    result = run_agent(
+                        self._expand_at_references(task), mode="assist",
+                        thread_id=self.session_id,
+                        session_name=self._session_name,
                     )
-                    result = run_agent(task, mode="assist", thread_id=self.session_id)
 
                     if not result.success:
                         print(self._colorize(f"❌ {result.final_answer}", "red"))
@@ -979,13 +1094,12 @@ class AITerminal:
                         )
                         continue
 
-                    print(
-                        self._colorize(
-                            f"\n📋 Running plan mode — generating plan first...",
-                            "bright_cyan",
-                        )
+                    self._maybe_autosave_session(task)
+                    result = run_agent(
+                        self._expand_at_references(task), mode="plan",
+                        thread_id=self.session_id,
+                        session_name=self._session_name,
                     )
-                    result = run_agent(task, mode="plan", thread_id=self.session_id)
 
                     if not result.success:
                         print(self._colorize(f"❌ {result.final_answer}", "red"))
@@ -1007,8 +1121,12 @@ class AITerminal:
                         )
                         continue
 
-                    print(self._colorize(f"\n💬 Thinking...", "bright_cyan"))
-                    result = run_agent(question, mode="chat", thread_id=self.session_id)
+                    self._maybe_autosave_session(question)
+                    result = run_agent(
+                        self._expand_at_references(question), mode="chat",
+                        thread_id=self.session_id,
+                        session_name=self._session_name,
+                    )
 
                     if not result.success:
                         print(self._colorize(f"❌ {result.final_answer}", "red"))
