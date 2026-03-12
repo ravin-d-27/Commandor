@@ -30,13 +30,12 @@ from .agent.executor import (
     _resolve_provider_model,
 )
 from .agent.lc_graph import (
-    PLANNING_SUFFIX,
     build_agent_graph,
     build_chat_graph,
     get_checkpointer,
 )
 from .agent.lc_models import build_model
-from .agent.lc_tools import ALL_TOOLS
+from .agent.lc_tools import ALL_TOOLS, _plan_tls
 
 
 # ---------------------------------------------------------------------------
@@ -90,15 +89,38 @@ class DoneEvent:
     metrics: dict = field(default_factory=dict)
 
 
+@dataclass
+class PlanCreatedEvent:
+    """Agent called create_task_plan — a new todo list to display."""
+    items: list
+
+
+@dataclass
+class PlanItemDoneEvent:
+    """Agent called complete_task — tick off one item in the todo list."""
+    index: int
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _drain_plan_queue(plan_queue: list) -> Generator:
+    """Yield PlanCreatedEvent / PlanItemDoneEvent from the thread-local queue."""
+    while plan_queue:
+        ev = plan_queue.pop(0)
+        if ev[0] == "plan_created":
+            yield PlanCreatedEvent(items=ev[1])
+        elif ev[0] == "task_done":
+            yield PlanItemDoneEvent(index=ev[1])
+
 
 def _iter_graph(
     graph,
     input_data,
     config: dict,
     metrics: dict | None = None,
+    plan_queue: list | None = None,
 ) -> Generator:
     """Core streaming loop — yields typed events instead of printing to stdout."""
     from .agent.lc_tools import DANGEROUS_TOOL_NAMES  # noqa: PLC0415
@@ -109,6 +131,10 @@ def _iter_graph(
     last_usage = None
 
     for chunk, _meta in graph.stream(input_data, config, stream_mode="messages"):
+
+        # Drain plan events pushed by the previous tool execution
+        if plan_queue:
+            yield from _drain_plan_queue(plan_queue)
 
         # ----------------------------------------------------------------
         # ToolMessage — result of a tool call
@@ -181,6 +207,10 @@ def _iter_graph(
             last_usage.get("output_tokens") or last_usage.get("completion_tokens")
         )
 
+    # -- Drain any remaining plan events from the last tool call --
+    if plan_queue:
+        yield from _drain_plan_queue(plan_queue)
+
     # -- Final answer fallback (Gemini often returns no streaming tokens) --
     if not accumulated.strip():
         state = graph.get_state(config)
@@ -215,7 +245,7 @@ def stream_agent_events(
 
     Args:
         task:         The user's message/task.
-        mode:         'agent', 'chat', 'plan', 'assist' (assist runs as agent).
+        mode:         'agent' (autonomous, uses tools) or 'chat' (no tools).
         provider:     AI provider. Defaults to config default.
         model:        Model ID. Defaults to provider default.
         thread_id:    Session UUID for conversation memory.
@@ -238,8 +268,7 @@ def stream_agent_events(
     system_prompt = _build_system_prompt()
     resolved_tid = thread_id or str(uuid.uuid4())
 
-    # assist runs as agent (v1 — full interactive assist deferred to v2)
-    effective_mode = "agent" if mode == "assist" else mode
+    effective_mode = "agent" if mode not in ("agent", "chat") else mode
 
     scoped_tid = f"{effective_mode}_{resolved_tid}"
     config: dict = {"configurable": {"thread_id": scoped_tid}}
@@ -249,58 +278,19 @@ def stream_agent_events(
                       + (f"  ·  {session_name}" if session_name else ""))
 
     try:
+        plan_queue: list = []
+        _plan_tls.queue = plan_queue
         if effective_mode == "chat":
             graph = build_chat_graph(llm, system_prompt)
             input_data = {"messages": [HumanMessage(content=task)]}
             yield from _iter_graph(graph, input_data, config, metrics)
             state = graph.get_state(config)
 
-        elif effective_mode == "plan":
-            # Phase 1 — generate plan
-            yield StatusEvent(message="generating plan…")
-            planning_prompt = system_prompt + PLANNING_SUFFIX
-            plan_config: dict = {"configurable": {"thread_id": f"plan_{uuid.uuid4()}"}}
-            plan_graph = build_chat_graph(llm, planning_prompt)
-            plan_tokens: list[str] = []
-            for ev in _iter_graph(
-                plan_graph,
-                {"messages": [HumanMessage(content=task)]},
-                plan_config,
-            ):
-                if isinstance(ev, TokenEvent):
-                    plan_tokens.append(ev.text)
-                yield ev
-            plan_text = "".join(plan_tokens)
-            if not plan_text.strip():
-                plan_state = plan_graph.get_state(plan_config)
-                plan_text = _extract_final_answer(plan_state.values)
-
-            # Phase 2 — execute with plan injected
-            yield StatusEvent(message="executing plan…")
-            exec_prompt = (
-                system_prompt
-                + "\n\n## Approved Plan\n"
-                  "Follow this plan step by step:\n\n"
-                + plan_text
-                + "\n"
-            )
-            exec_tid = f"plan_exec_{resolved_tid}"
-            exec_config: dict = {"configurable": {"thread_id": exec_tid}}
-            hook = _make_summarize_hook(llm, metrics)
-            agent_graph = build_agent_graph(llm, ALL_TOOLS, exec_prompt, pre_model_hook=hook)
-            yield from _iter_graph(
-                agent_graph,
-                {"messages": [HumanMessage(content=task)]},
-                exec_config,
-                metrics,
-            )
-            state = agent_graph.get_state(exec_config)
-
-        else:  # agent (default, also assist)
+        else:  # agent (default)
             hook = _make_summarize_hook(llm, metrics)
             graph = build_agent_graph(llm, ALL_TOOLS, system_prompt, pre_model_hook=hook)
             input_data = {"messages": [HumanMessage(content=task)]}
-            yield from _iter_graph(graph, input_data, config, metrics)
+            yield from _iter_graph(graph, input_data, config, metrics, plan_queue=plan_queue)
             state = graph.get_state(config)
 
         metrics["approx_tokens"] = _approx_tokens(
@@ -325,3 +315,5 @@ def stream_agent_events(
             except Exception:
                 pass
         yield ErrorEvent(message=f"Agent error: {e}")
+    finally:
+        _plan_tls.queue = None

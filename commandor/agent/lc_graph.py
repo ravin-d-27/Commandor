@@ -101,6 +101,27 @@ codebases, and manage files — efficiently and correctly. ALWAYS complete the t
 - When you've finished a task, give a summary of what you did including key findings.
 - When you've read files, include relevant snippets in your response.
 - If something went wrong or you're blocked, say so clearly and suggest next steps.
+
+## Task tracking with create_task_plan / complete_task
+
+For **complex multi-step tasks** — implementing features, debugging, refactoring, project
+setup, or anything that requires 3 or more distinct steps — use the planning tools:
+
+1. Call `create_task_plan(tasks=[...])` **first**, before any file reads or edits.
+   - List 3–12 short, action-oriented task descriptions.
+   - Example: `["Read src/auth.py to understand the login flow",
+                 "Edit validate_token() to handle token expiry",
+                 "Run pytest auth/ to verify fix",
+                 "Summarise the changes made"]`
+
+2. Work through each task in order using the appropriate tools.
+
+3. **Immediately after completing each task**, call `complete_task(index=N)` (0-based index).
+   - Tick each item off as you finish it — do NOT batch these calls at the end.
+   - The user watches each checkbox tick off live.
+
+**Skip the plan** for simple one-step tasks (a single file read, a one-line fix,
+a direct question) and for pure conversational messages.
 """
 
 # ---------------------------------------------------------------------------

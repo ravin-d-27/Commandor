@@ -1,9 +1,11 @@
 """LangChain @tool-decorated wrappers around file_ops and shell utilities."""
 
+import json
 import os
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import List, Optional
 
@@ -11,6 +13,15 @@ from langchain_core.tools import tool
 
 from ..utils import file_ops, shell
 from ..utils.diff_display import display_diff
+
+
+# ---------------------------------------------------------------------------
+# Thread-local queue for plan events.
+# agent_bridge sets _plan_tls.queue = [] before each agent run and clears it
+# after. The tools push (event_type, payload) tuples; _iter_graph drains them.
+# ---------------------------------------------------------------------------
+
+_plan_tls = threading.local()
 
 
 # ---------------------------------------------------------------------------
@@ -325,10 +336,71 @@ def get_environment_tool() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Task-tracking tools (signal the TUI to render / update the plan panel)
+# ---------------------------------------------------------------------------
+
+@tool
+def create_task_plan(tasks: list) -> str:
+    """Show the user a live numbered task plan in the terminal UI.
+
+    WHEN TO USE: Call this at the very start of any complex multi-step task
+    — implementing a feature, debugging, refactoring, project setup, etc. —
+    that requires 3 or more distinct steps.  This lets the user track your
+    progress in real time.
+
+    HOW TO USE:
+    1. Call create_task_plan(tasks=[...]) FIRST, before using any other tools.
+    2. List 3-12 concise, action-oriented task descriptions.
+    3. Execute the tasks in order.
+    4. Call complete_task(index=N) immediately after finishing each step.
+
+    DO NOT call this for simple one-step lookups, single-file reads, or
+    direct conversational questions.
+
+    Args:
+        tasks: List of short task descriptions in execution order.
+               Example: ["Read src/auth.py to understand login flow",
+                         "Edit validate_token() to handle expiry",
+                         "Run pytest auth/ to verify",
+                         "Summarise changes"]
+    """
+    q = getattr(_plan_tls, "queue", None)
+    if q is not None:
+        q.append(("plan_created", list(tasks)))
+    return json.dumps({
+        "status": "plan_registered",
+        "count": len(tasks),
+        "message": (
+            f"Plan with {len(tasks)} tasks displayed to user. "
+            "Execute each task and call complete_task(index) after finishing each one."
+        ),
+    })
+
+
+@tool
+def complete_task(index: int) -> str:
+    """Mark a plan task as done — checks it off live for the user.
+
+    Call this immediately after completing each task listed in the most
+    recent create_task_plan() call.  Use the 0-based position of the task.
+
+    IMPORTANT: Call this DURING execution right after each step — not all
+    at the end.  The user watches each item tick off in real time.
+
+    Args:
+        index: 0-based task index (first task = 0, second = 1, etc.).
+    """
+    q = getattr(_plan_tls, "queue", None)
+    if q is not None:
+        q.append(("task_done", index))
+    return json.dumps({"status": "task_completed", "index": index})
+
+
+# ---------------------------------------------------------------------------
 # Tool registries
 # ---------------------------------------------------------------------------
 
-# All tools available to agent/assist modes
+# All tools available to agent mode
 ALL_TOOLS = [
     read_file_tool,
     write_file_tool,
@@ -343,6 +415,8 @@ ALL_TOOLS = [
     get_project_files_tool,
     get_git_info_tool,
     get_environment_tool,
+    create_task_plan,
+    complete_task,
 ]
 
 # Tool names that modify the filesystem or execute commands — used by assist mode

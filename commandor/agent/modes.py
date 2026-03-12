@@ -4,10 +4,8 @@ from typing import Dict
 
 # Map of mode name → human-readable description
 MODES: Dict[str, str] = {
-    "agent": "Fully autonomous — the AI uses tools freely until the task is done.",
+    "agent": "Fully autonomous — the AI uses tools freely, plans as needed, and executes until the task is done.",
     "chat":  "Conversation only — no tool access, just AI knowledge and reasoning.",
-    "assist":"Human-in-the-loop — pauses before each tool call for your approval.",
-    "plan":  "Plan-then-execute — the AI proposes a numbered plan first; you review, optionally edit, then it executes.",
 }
 
 

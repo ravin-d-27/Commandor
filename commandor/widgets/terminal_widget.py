@@ -31,6 +31,8 @@ from textual.widgets import Input, RichLog, Static
 from ..agent_bridge import (
     DoneEvent,
     ErrorEvent,
+    PlanCreatedEvent,
+    PlanItemDoneEvent,
     StatusEvent,
     ThinkingEvent,
     TokenEvent,
@@ -47,14 +49,11 @@ from ..session_manager import SessionManager
 
 _PROVIDERS = ("gemini", "anthropic", "openai", "openrouter")
 
-_AI_CMDS = {"/agent", "/chat", "/ask", "/plan", "/assist"}
+_AI_CMDS = {"/agent", "/chat"}
 
 _MODE_MAP = {
     "/agent": "agent",
     "/chat": "chat",
-    "/ask": "chat",
-    "/plan": "plan",
-    "/assist": "assist",
 }
 
 # Context window limits per model (tokens)
@@ -79,8 +78,8 @@ _MODEL_CTX_LIMITS: dict[str, int] = {
 }
 
 _ALL_SLASH_CMDS = sorted([
-    "/agent", "/ask", "/assist", "/chat", "/clear",
-    "/export", "/help", "/model", "/pipe", "/plan", "/provider",
+    "/agent", "/chat", "/clear",
+    "/export", "/help", "/model", "/pipe", "/provider",
     "/providers", "/reset", "/retry", "/sessions", "/setup",
 ])
 
@@ -93,11 +92,8 @@ HELP_TEXT = """\
 ## AI Commands
 | Command | Description |
 |---------|-------------|
-| `/agent <task>` | Run autonomous agent mode (default) |
-| `/chat <message>` | Conversational Q&A, no tools |
-| `/ask <question>` | Alias for /chat |
-| `/plan <task>` | Generate plan then execute |
-| `/assist <task>` | Assisted mode |
+| `/agent <task>` | Run the AI agent (plans, uses tools, executes autonomously) |
+| `/chat <message>` | Conversational Q&A — no tools, just reasoning |
 
 ## Provider / Model
 | Command | Description |
@@ -143,6 +139,10 @@ HELP_TEXT = """\
 ## Shell
 Any command that doesn't start with `/` is run as a shell command.
 `cd` is handled natively and updates the prompt path.
+
+## Notes
+The agent decides internally whether to plan, ask clarifying questions,
+or execute directly based on the complexity of the task.
 
 ## Copy / Paste
 Use **Shift+drag** to select text (bypasses mouse reporting).
@@ -202,6 +202,10 @@ class TerminalWidget(Widget):
         self._ctx_model: str = ""
         self._conversation_log: list[dict] = []
 
+        # Plan tracking state
+        self._plan_items: list = []
+        self._plan_done: set = set()
+
     # ------------------------------------------------------------------
     # Compose
     # ------------------------------------------------------------------
@@ -209,6 +213,7 @@ class TerminalWidget(Widget):
     def compose(self) -> ComposeResult:
         yield Static("", id="status-bar")
         yield RichLog(id="log", highlight=False, markup=False, wrap=True)
+        yield Static("", id="plan-panel")
         yield Static("", id="stream-preview")
         with Horizontal(id="input-bar"):
             yield Static(self._prompt_text(), id="prompt-label")
@@ -216,6 +221,7 @@ class TerminalWidget(Widget):
 
     def on_mount(self) -> None:
         self.query_one("#stream-preview").display = False
+        self.query_one("#plan-panel").display = False
         self._load_history()
         self._update_status_bar()
         self._show_welcome()
@@ -513,6 +519,25 @@ class TerminalWidget(Widget):
     # AI execution
     # ------------------------------------------------------------------
 
+    def _render_plan(self) -> None:
+        """Re-render the live plan panel from current state."""
+        if not self._plan_items:
+            return
+        pending = [i for i in range(len(self._plan_items)) if i not in self._plan_done]
+        current_idx = pending[0] if pending else -1
+        lines = ["  [bold #ffd700]◆ Task Plan[/bold #ffd700]", ""]
+        for i, item in enumerate(self._plan_items):
+            if i in self._plan_done:
+                lines.append(f"  [#d4a017]✓[/#d4a017]  [#7a6b4a]{item}[/#7a6b4a]")
+            elif i == current_idx:
+                lines.append(f"  [#ffd700]▶[/#ffd700]  [bold #f5ecd0]{item}[/bold #f5ecd0]")
+            else:
+                lines.append(f"  [#2a1f00]○[/#2a1f00]  [#7a6b4a]{item}[/#7a6b4a]")
+        lines.append("")
+        panel = self.query_one("#plan-panel", Static)
+        panel.display = True
+        panel.update(Text.from_markup("\n".join(lines)))
+
     def _run_ai(self, task: str, mode: str = "agent") -> None:
         log = self.query_one("#log", RichLog)
 
@@ -605,6 +630,15 @@ class TerminalWidget(Widget):
                 )
             )
 
+        elif isinstance(event, PlanCreatedEvent):
+            self._plan_items = list(event.items)
+            self._plan_done = set()
+            self._render_plan()
+
+        elif isinstance(event, PlanItemDoneEvent):
+            self._plan_done.add(event.index)
+            self._render_plan()
+
         elif isinstance(event, ErrorEvent):
             preview.display = False
             log.write(Panel(
@@ -643,6 +677,19 @@ class TerminalWidget(Widget):
             if m.get("model"):
                 self._ctx_model = m["model"]
             self._update_status_bar()
+
+            # Dump final plan to log if one was active, then hide panel
+            if self._plan_items:
+                plan_lines = ["  [bold #ffd700]◆ Task Plan — completed[/bold #ffd700]", ""]
+                for i, item in enumerate(self._plan_items):
+                    if i in self._plan_done:
+                        plan_lines.append(f"  [#d4a017]✓[/#d4a017]  [#7a6b4a]{item}[/#7a6b4a]")
+                    else:
+                        plan_lines.append(f"  [#cc2200]✗[/#cc2200]  [#7a6b4a]{item} (incomplete)[/#7a6b4a]")
+                log.write(Text.from_markup("\n".join(plan_lines)))
+                self._plan_items = []
+                self._plan_done = set()
+                self.query_one("#plan-panel", Static).display = False
 
             # Metrics footer — compact format to fit Rule width
             m = event.metrics
@@ -803,6 +850,12 @@ class TerminalWidget(Widget):
         self._ctx_model = ""
         self._last_ai_task = None
         self._conversation_log = []
+        self._plan_items = []
+        self._plan_done = set()
+        try:
+            self.query_one("#plan-panel", Static).display = False
+        except Exception:
+            pass
         self._update_status_bar()
         log.write(Text("  ✓ Conversation reset. New session started.", style="#d4a017"))
 

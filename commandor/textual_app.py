@@ -60,6 +60,14 @@ TerminalWidget {
     color: #f5ecd0;
 }
 
+#plan-panel {
+    height: auto;
+    background: #000000;
+    border-left: solid #ffd700;
+    padding: 0 2;
+    color: #f5ecd0;
+}
+
 #input-bar {
     height: 3;
     background: #0a0a0a;
