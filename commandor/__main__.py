@@ -6,7 +6,6 @@ Entry point for commandor command
 
 import sys
 import argparse
-from .terminal import AITerminal
 from . import config
 from .agent import run_agent
 
@@ -17,11 +16,11 @@ def main():
         description="Commandor - Agentic CLI for autonomous coding",
         prog="commandor"
     )
-    
+
     parser.add_argument(
         "task",
         nargs="*",
-        help="Task to accomplish (for agent mode)"
+        help="Task to accomplish (for non-interactive mode)"
     )
     parser.add_argument(
         "-a", "--agent",
@@ -61,22 +60,22 @@ def main():
         action="store_true",
         help="Show version"
     )
-    
+
     args = parser.parse_args()
-    
+
     if args.version:
-        print("Commandor v0.1.0")
+        print("Commandor v0.2.0")
         print("Agentic CLI - Autonomous coding assistant")
         return 0
-    
+
     if args.setup:
         config.setup_interactive()
         return 0
-    
-    # If we have a task and a mode flag, run in that mode
+
+    # If we have a task and a mode flag, run non-interactively
     if args.task and (args.agent or args.assist or args.chat or args.plan):
         task = " ".join(args.task)
-        
+
         if args.agent:
             mode = "agent"
         elif args.assist:
@@ -85,15 +84,15 @@ def main():
             mode = "plan"
         else:
             mode = "chat"
-        
+
         try:
             result = run_agent(
-                task, 
+                task,
                 mode=mode,
                 provider=args.provider,
                 model=args.model
             )
-            
+
             if result.success:
                 print("\n" + "=" * 40)
                 print("Result:")
@@ -102,19 +101,37 @@ def main():
             else:
                 print(f"Error: {result.final_answer}", file=sys.stderr)
                 return 1
-            
+
             return 0
         except Exception as e:
             print(f"Error: {e}", file=sys.stderr)
             return 1
-    
-    # Otherwise, run interactive terminal
+
+    # Interactive Textual split-pane UI
     try:
-        terminal = AITerminal()
-        terminal.run()
+        from .textual_app import CommandorApp  # noqa: PLC0415
+
+        # Determine initial mode for chat panel
+        if args.agent:
+            initial_mode = "agent"
+        elif args.chat:
+            initial_mode = "chat"
+        elif args.plan:
+            initial_mode = "plan"
+        elif args.assist:
+            initial_mode = "assist"
+        else:
+            initial_mode = "agent"
+
+        app = CommandorApp(
+            initial_mode=initial_mode,
+            provider=args.provider,
+            model=args.model,
+        )
+        app.run()
         return 0
     except KeyboardInterrupt:
-        print("\n👋 Goodbye!")
+        print("\nGoodbye!")
         return 0
     except Exception as e:
         print(f"Error starting Commandor: {e}", file=sys.stderr)
