@@ -52,15 +52,15 @@ TerminalWidget {
     border-bottom: solid #2a1f00;
 }
 
-#stream-preview {
+#plan-panel {
     height: auto;
-    background: #000000;
-    border-left: solid #ffd700;
+    background: #0a0a0a;
+    border-bottom: solid #2a1f00;
     padding: 0 2;
     color: #f5ecd0;
 }
 
-#plan-panel {
+#stream-preview {
     height: auto;
     background: #000000;
     border-left: solid #ffd700;

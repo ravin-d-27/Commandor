@@ -12,14 +12,10 @@ Commandor is built on **LangGraph**, which allows for complex, stateful multi-tu
 
 ### Interaction Modes
 
-Commandor supports four primary modes of operation, defined in `commandor/agent/modes.py` and implemented in `commandor/agent/executor.py`:
+Commandor supports two primary modes of operation, defined in `commandor/agent/modes.py` and implemented in `commandor/agent/executor.py`:
 
-1.  **Agent Mode (`agent`)**: Fully autonomous. The agent uses all available tools to complete a task without asking for permission.
+1.  **Agent Mode (`agent`)**: Fully autonomous. The agent uses all available tools to complete a task without asking for permission. For complex multi-step tasks, the agent can create a live task plan that displays progress in real-time.
 2.  **Chat Mode (`chat`)**: A pure conversational mode with no tools. Useful for asking questions about code or general programming concepts.
-3.  **Assist Mode (`assist`)**: Human-in-the-loop. The agent is autonomous but **pauses and waits for user approval** before executing any "dangerous" tools (like writing files or running shell commands).
-4.  **Plan Mode (`plan`)**: A two-phase workflow.
-    *   **Phase 1 (Planning)**: The agent explores the task and produces a structured, numbered plan using a chat-only graph.
-    *   **Phase 2 (Execution)**: Once the user approves or edits the plan, a second agent executes it step-by-step using the full toolset.
 
 ## Project Structure
 
@@ -70,3 +66,9 @@ The interactive prompt displays real-time metrics in the bottom toolbar:
 - **Tokens**: Input/Output tokens for the last operation.
 - **Context**: Approximate total tokens currently in the conversation buffer.
 - **Cost**: Estimated session cost (if supported by the provider).
+
+### Live Task Planning
+For complex multi-step tasks, the agent can create a task plan that displays in the TUI in real-time:
+- The agent calls `create_task_plan(tasks=[...])` to display a numbered todo list
+- As each step completes, the agent calls `complete_task(index=N)` to check off items
+- The task panel updates live in the TUI, showing current progress with visual indicators

@@ -212,8 +212,8 @@ class TerminalWidget(Widget):
 
     def compose(self) -> ComposeResult:
         yield Static("", id="status-bar")
-        yield RichLog(id="log", highlight=False, markup=False, wrap=True)
         yield Static("", id="plan-panel")
+        yield RichLog(id="log", highlight=False, markup=False, wrap=True)
         yield Static("", id="stream-preview")
         with Horizontal(id="input-bar"):
             yield Static(self._prompt_text(), id="prompt-label")
@@ -523,6 +523,10 @@ class TerminalWidget(Widget):
         """Re-render the live plan panel from current state."""
         if not self._plan_items:
             return
+        try:
+            panel = self.query_one("#plan-panel", Static)
+        except Exception:
+            return
         pending = [i for i in range(len(self._plan_items)) if i not in self._plan_done]
         current_idx = pending[0] if pending else -1
         lines = ["  [bold #ffd700]◆ Task Plan[/bold #ffd700]", ""]
@@ -534,9 +538,11 @@ class TerminalWidget(Widget):
             else:
                 lines.append(f"  [#2a1f00]○[/#2a1f00]  [#7a6b4a]{item}[/#7a6b4a]")
         lines.append("")
-        panel = self.query_one("#plan-panel", Static)
-        panel.display = True
-        panel.update(Text.from_markup("\n".join(lines)))
+        try:
+            panel.display = True
+            panel.update(Text.from_markup("\n".join(lines)))
+        except Exception:
+            pass
 
     def _run_ai(self, task: str, mode: str = "agent") -> None:
         log = self.query_one("#log", RichLog)

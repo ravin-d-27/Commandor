@@ -1,9 +1,5 @@
 # Commandor
 
-<p align="center">
-  <img src="assets/logo.png" alt="Commandor" width="200"/>
-</p>
-
 <h3 align="center">🤖 Agentic CLI — Autonomous Coding Assistant</h3>
 
 <p align="center">
@@ -20,29 +16,16 @@
 
 ## ✨ Why Commandor?
 
-Traditional AI coding assistants work as separate tools — you switch contexts between your editor, terminal, and chat window. **Commandor** brings the AI directly into your terminal as a **first-class citizen**, capable of:
-
-- 🚀 **Autonomous execution** — Describe a task, watch it get done
-- 🔧 **Full tool access** — Read, write, edit, search, run commands
-- 💾 **Persistent sessions** — Conversations survive restarts
-- 🎯 **Smart context** — Auto-summarizes long conversations, tracks token usage
-- 🛡️ **Safety first** — Dangerous operations flagged, human-in-the-loop mode
-- 🌈 **Beautiful TUI** — Modern Textual interface with real-time streaming
-
-Built on **LangGraph** for robust agent orchestration and **Textual** for a rich terminal experience.
-
 ---
 
 ## 🎯 Agent Modes
 
-Commandor offers four distinct interaction modes, each optimized for different workflows:
+Commandor offers two distinct interaction modes:
 
 | Mode | Command | Description |
 |------|---------|-------------|
-| **Autonomous** | `/agent <task>` | The AI works independently, using all tools freely until the task is complete. Best for straightforward tasks. |
-| **Assist** | `/assist <task>` | Human-in-the-loop: The AI proposes actions and asks for your confirmation before executing each tool. Perfect for learning or high-stakes changes. |
-| **Plan** | `/plan <task>` | Two-phase: First, the AI generates a numbered plan for your review. You can accept, edit, or reject it before execution begins. Great for complex refactors. |
-| **Chat** | `/chat <message>` or `/ask` | Pure conversation — no tool access. Use for questions, explanations, code reviews, or brainstorming. |
+| **Agent** | `/agent <task>` | Autonomous AI that uses all available tools to complete tasks. The AI decides how to accomplish the goal and executes autonomously. |
+| **Chat** | `/chat <message>` | Pure conversation — no tool access. Use for questions, explanations, code reviews, or brainstorming. |
 
 ---
 
@@ -264,12 +247,6 @@ Run a single task without entering the TUI:
 commandor -a "fix the bug in main.py"
 commandor --agent "add comprehensive tests for the auth module"
 
-# Assist mode (with confirmations)
-commandor --assist "migrate from SQLite to PostgreSQL"
-
-# Plan mode
-commandor --plan "design a new authentication system"
-
 # Chat mode
 commandor --chat "explain how LangGraph works"
 ```
@@ -294,11 +271,8 @@ commandor --chat "explain quantum computing" -p openai -m o1
 
 | Command | Mode | Description |
 |---------|------|-------------|
-| `/agent <task>` | Autonomous | Execute task independently using all tools |
-| `/assist <task>` | Assist | Execute with confirmation before each tool call |
-| `/plan <task>` | Plan | Generate a plan, review, then execute |
+| `/agent <task>` | Agent | Execute task independently using all tools |
 | `/chat <message>` | Chat | Conversational Q&A (no tools) |
-| `/ask <question>` | Chat | Alias for `/chat` |
 | `/retry` | Any | Re-run the last AI command |
 | `/reset` | Any | Clear conversation memory, start fresh session |
 
@@ -513,23 +487,19 @@ Commandor/
 │   ├── api_manager.py            # (deprecated — functionality moved to config.py)
 │   ├── session_manager.py        # Named session persistence (JSON registry)
 │   │
-│   ├── agents/                   # **Note: directory is `agent/` (singular)**
+│   ├── agent/                    # Agent core (singular, not plural)
 │   │   ├── __init__.py
 │   │   ├── executor.py           # run_agent(), _run_* mode runners, metrics
 │   │   ├── lc_graph.py           # LangGraph factory (build_agent_graph, etc.)
 │   │   ├── lc_models.py          # build_model() — provider model factory
 │   │   ├── lc_tools.py           # All @tool-decorated functions
-│   │   ├── modes.py              # Mode descriptions
-│   │   └── prompts.py            # (if exists) Additional prompt templates
+│   │   └── modes.py              # Mode descriptions
 │   │
 │   ├── providers/                # AI provider integrations
 │   │   ├── __init__.py
-│   │   ├── base.py               # AgentResult dataclass, provider base
-│   │   ├── factory.py            # Provider factory (if exists)
-│   │   ├── gemini.py             # Gemini-specific logic
-│   │   ├── anthropic.py          # Anthropic-specific logic
-│   │   ├── openai.py             # OpenAI-specific logic
-│   │   └── openrouter.py         # OpenRouter-specific logic
+│   │   └── base.py               # AgentResult dataclass, provider base
+│   │   # Note: Provider-specific logic (gemini, anthropic, openai, openrouter)
+│   │   # is handled by LangChain integrations in agent/lc_models.py
 │   │
 │   ├── utils/                    # Utility modules
 │   │   ├── __init__.py
@@ -539,8 +509,7 @@ Commandor/
 │   │
 │   └── widgets/                  # Textual UI components
 │       ├── __init__.py
-│       ├── terminal_widget.py    # Main unified terminal (shell + AI)
-│       └── chat_panel.py         # (if exists) Alternative chat UI
+│       └── terminal_widget.py    # Main unified terminal (shell + AI)
 │
 ├── tests/                        # Test suite (if exists)
 ├── pyproject.toml                # Modern Python packaging
@@ -558,18 +527,29 @@ Commandor/
 - Checkpointer: `SqliteSaver` at `~/.commandor/checkpoints.db` for persistence
 - Thread IDs scoped by mode: `{mode}_{uuid}` to separate chat/agent/plan histories
 
+**Provider Integration:**
+- All provider logic (Gemini, Anthropic, OpenAI, OpenRouter) is in `agent/lc_models.py`
+- Uses LangChain's `ChatGoogleGenerativeAI`, `ChatAnthropic`, `ChatOpenAI` integrations
+- No separate provider modules — single factory function `build_model()` handles all providers
+
 **Streaming Pipeline:**
-1. `terminal_widget.py` → `_run_ai()` → spawns worker
+1. `terminal_widget.py` → `_run_ai()` → spawns worker thread
 2. Worker calls `agent_bridge.stream_agent_events()`
-3. `stream_agent_events()` builds LLM, constructs graph, calls `_iter_graph()`
-4. Events (`TokenEvent`, `ToolCallEvent`, etc.) yielded back to UI
-5. `TerminalWidget._on_ai_event()` renders each event type
+3. `stream_agent_events()` builds LLM via `lc_models.py`, constructs graph via `lc_graph.py`, calls `_iter_graph()`
+4. Events (`ThinkingEvent`, `ToolCallEvent`, `ToolResultEvent`, etc.) yielded back to UI
+5. `TerminalWidget._on_ai_event()` renders each event type with Rich formatting
 
 **Context Summarization:**
 - Hook `_make_summarize_hook()` runs before each LLM call
 - Checks `_approx_tokens(messages)` against threshold (80% of context window)
 - If exceeded, summarizes old messages into a single `HumanMessage` with summary
 - Prevents context overflow while preserving key information
+
+**Session Management:**
+- `session_manager.py` maintains a JSON registry at `~/.commandor/sessions.json`
+- Maps human-readable names to thread IDs (UUIDs)
+- Checkpoints are stored in SQLite and survive restarts
+- Sessions can be saved, resumed, renamed, and deleted via `/sessions` commands
 
 ---
 
@@ -620,19 +600,15 @@ pytest tests/ -v
 /agent fix the failing tests and re-run
 ```
 
-### Complex Refactoring with Plan Mode
+### Complex Agent Task
 ```bash
-/plan refactor the user authentication system to use JWT tokens
+/agent implement OAuth2 login
 
-# AI will output a plan like:
-# 1. Read current auth implementation (read_file_tool)
-# 2. Identify user model and login flow
-# 3. Design JWT integration strategy
-# 4. Add JWT secret to config
-# 5. Implement token generation in login endpoint
-# ...
-
-# You review, edit if needed, then approve. AI executes step by step.
+# The agent will autonomously:
+# 1. Explore the codebase
+# 2. Create necessary files
+# 3. Implement the feature
+# 4. Run tests to verify
 ```
 
 ### Session Management
@@ -853,15 +829,6 @@ Built with these amazing open-source projects:
 - GitHub: https://github.com/ravin-d-27
 - Email: ravin.d3107@outlook.com  
 - Issues: https://github.com/ravin-d-27/Commandor/issues
-
----
-
-## 📊 Version & Status
-
-- **Current Version**: 0.2.0
-- **Status**: Actively maintained
-- **Last Major Update**: Recent commits include session autosave, metrics monitoring, and classifier improvements
-- **Roadmap**: See [GitHub Projects](https://github.com/ravin-d-27/Commandor/projects) for upcoming features
 
 ---
 
