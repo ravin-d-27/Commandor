@@ -39,6 +39,7 @@ from .lc_graph import (
 )
 from .lc_models import PROVIDER_DEFAULTS, build_model
 from .lc_tools import ALL_TOOLS, DANGEROUS_TOOL_NAMES
+from .plugins import get_all_tools_with_plugins
 
 # Local / keyless providers don't require a real API key
 _KEYLESS_PROVIDERS = {"ollama"}
@@ -595,7 +596,8 @@ def _run_agent(
     t0 = time.monotonic()
 
     hook = _make_summarize_hook(llm, metrics)
-    graph = build_agent_graph(llm, ALL_TOOLS, system_prompt, pre_model_hook=hook)
+    tools = get_all_tools_with_plugins()
+    graph = build_agent_graph(llm, tools, system_prompt, pre_model_hook=hook)
     first_message = _build_first_message(task, image_paths)
     _stream_graph(graph, {"messages": [first_message]}, config, metrics)
 
@@ -643,7 +645,8 @@ def _run_assist(
     t0 = time.monotonic()
 
     hook = _make_summarize_hook(llm, metrics)
-    graph = build_assist_graph(llm, ALL_TOOLS, system_prompt, pre_model_hook=hook)
+    tools = get_all_tools_with_plugins()
+    graph = build_assist_graph(llm, tools, system_prompt, pre_model_hook=hook)
 
     _stream_graph(graph, {"messages": [HumanMessage(content=task)]}, config, metrics)
 
@@ -833,7 +836,8 @@ def _run_plan(
     exec_tid = f"agent_{resolved_tid}" if resolved_tid else f"plan_exec_{uuid.uuid4()}"
     exec_config = {"configurable": {"thread_id": exec_tid}}
     hook = _make_summarize_hook(llm, metrics)
-    agent_graph = build_agent_graph(llm, ALL_TOOLS, execution_prompt, pre_model_hook=hook)
+    tools = get_all_tools_with_plugins()
+    agent_graph = build_agent_graph(llm, tools, execution_prompt, pre_model_hook=hook)
     _stream_graph(
         agent_graph,
         {"messages": [HumanMessage(content=task)]},

@@ -37,6 +37,7 @@ from .agent.lc_graph import (
 )
 from .agent.lc_models import build_model
 from .agent.lc_tools import ALL_TOOLS, _plan_tls
+from .agent.plugins import get_all_tools_with_plugins
 from .utils.multimodal import build_multimodal_message, is_image_file
 
 
@@ -320,7 +321,8 @@ def stream_agent_events(
 
         else:  # agent (default)
             hook = _make_summarize_hook(llm, metrics)
-            graph = build_agent_graph(llm, ALL_TOOLS, system_prompt, pre_model_hook=hook)
+            tools = get_all_tools_with_plugins()
+            graph = build_agent_graph(llm, tools, system_prompt, pre_model_hook=hook)
             input_data = {"messages": [first_message]}
             yield from _iter_graph(graph, input_data, config, metrics, plan_queue=plan_queue)
             state = graph.get_state(config)

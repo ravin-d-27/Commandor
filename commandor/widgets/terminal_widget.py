@@ -107,7 +107,7 @@ _MODEL_CTX_LIMITS: dict[str, int] = {
 _ALL_SLASH_CMDS = sorted([
     "/agent", "/assist", "/chat", "/clear", "/diff",
     "/export", "/help", "/image", "/model", "/pipe", "/plan",
-    "/provider", "/providers", "/reset", "/retry",
+    "/plugins", "/provider", "/providers", "/reset", "/retry",
     "/sessions", "/setup",
 ])
 
@@ -147,6 +147,8 @@ HELP_TEXT = """\
 |---------|-------------|
 | `/setup` | Interactive API key configuration wizard |
 | `/setup <provider>` | Start setup for a specific provider |
+| `/plugins` | List loaded plugin tools |
+| `/plugins reload` | Re-discover installed plugin entry points |
 
 ## Other
 | Command | Description |
@@ -482,6 +484,9 @@ class TerminalWidget(Widget):
 
         elif cmd == "/image":
             self._cmd_image(arg, log)
+
+        elif cmd == "/plugins":
+            self._cmd_plugins(arg, log)
 
         elif cmd == "/api":
             self._cmd_api(arg, log)
@@ -983,6 +988,56 @@ class TerminalWidget(Widget):
             "  They will be sent with the next /agent, /chat, /assist, or /plan call.",
             style="#7a6b4a",
         ))
+
+    # ------------------------------------------------------------------
+    # /plugins — list (and reload) discovered plugin tools
+    # ------------------------------------------------------------------
+
+    def _cmd_plugins(self, arg: str, log: RichLog) -> None:
+        """Show loaded plugins and their tools.
+
+        Usage:
+            /plugins          list plugins + tools + any load errors
+            /plugins reload   re-discover entry points (useful in dev)
+        """
+        from ..agent.plugins import (
+            ENTRY_POINT_GROUP,
+            get_load_errors,
+            load_plugins,
+        )
+
+        parts = arg.split() if arg else []
+        if parts and parts[0].lower() == "reload":
+            tools = load_plugins(force_reload=True)
+            log.write(Text("  ✓ Plugins reloaded.", style="#d4a017"))
+        else:
+            tools = load_plugins()
+
+        if not tools:
+            log.write(Text(
+                f"  No plugins registered.  Install a package that exposes an "
+                f"entry point in the [bold]{ENTRY_POINT_GROUP}[/bold] group.",
+                style="#7a6b4a",
+            ))
+        else:
+            log.write(Text(
+                f"  Loaded {len(tools)} plugin tool(s):", style="bold #f5ecd0"
+            ))
+            for t in tools:
+                name = getattr(t, "name", "?")
+                desc = (getattr(t, "description", "") or "").splitlines()[0][:80]
+                log.write(Text.from_markup(
+                    f"    [#c8a800]⚙[/#c8a800]  [bold]{name}[/bold]  "
+                    f"[#7a6b4a]{desc}[/#7a6b4a]"
+                ))
+
+        errs = get_load_errors()
+        if errs:
+            log.write(Text(
+                f"  Plugin load errors ({len(errs)}):", style="#cc2200"
+            ))
+            for e in errs:
+                log.write(Text(f"    • {e}", style="#cc2200"))
 
     # ------------------------------------------------------------------
     # /api  — interactive provider/key management
