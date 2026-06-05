@@ -267,6 +267,10 @@ def stream_agent_events(
         yield ErrorEvent(message=f"Failed to initialise model: {e}")
         return
 
+    # Expose active model to the tokenizer so _approx_tokens picks the right one
+    import commandor.agent.executor as _executor_mod
+    _executor_mod._active_model = resolved_model
+
     system_prompt = _build_system_prompt()
     resolved_tid = thread_id or str(uuid.uuid4())
 

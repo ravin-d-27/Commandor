@@ -43,6 +43,9 @@ from .lc_tools import ALL_TOOLS, DANGEROUS_TOOL_NAMES
 # Local / keyless providers don't require a real API key
 _KEYLESS_PROVIDERS = {"ollama"}
 
+# Active model name, used by _approx_tokens to pick a tokenizer.
+_active_model: str = "gpt-4o"
+
 
 def _resolve_provider_model(
     provider: Optional[str],
@@ -187,9 +190,15 @@ def _get_context_window(llm) -> int | None:
 
 
 def _approx_tokens(messages: list) -> int:
-    """Rough token estimate: chars / 4 (no tokenizer dependency)."""
-    from langchain_core.messages import get_buffer_string  # noqa: PLC0415
-    return len(get_buffer_string(messages)) // 4
+    """Token estimate using tiktoken (falls back to chars/4).
+
+    Uses cl100k_base as the encoding for any non-OpenAI model — much
+    more accurate than `len // 4` for code-heavy agent traces.
+    """
+    from ..utils.tokenizer import count_message_tokens  # noqa: PLC0415
+    # Use the active model's tokenizer when possible
+    model = globals().get("_active_model", "gpt-4o")
+    return count_message_tokens(messages, model=model)
 
 
 def _make_summarize_hook(llm, metrics: dict | None = None):
@@ -872,6 +881,11 @@ def run_agent(
             resolved_provider, api_key, resolved_model, base_url=resolved_base_url
         )
         system_prompt = _build_system_prompt()
+
+        # Expose the active model to the tokenizer helper (module-level state
+        # for the lifetime of this run).
+        global _active_model
+        _active_model = resolved_model
 
         resolved_tid = thread_id or str(uuid.uuid4())
         scoped_tid = f"{mode}_{resolved_tid}"
