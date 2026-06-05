@@ -277,10 +277,21 @@ def run_command_tool(command: str, timeout: int = 60) -> str:
     - Avoid commands needing interactive input (e.g. passwd, vim, less)
     - For long-running processes (servers, watchers), use a short timeout and note the PID
 
+    Safety: A handful of obviously destructive command patterns (rm -rf /, sudo rm,
+    curl | sh, mkfs, dd of=/dev/sd*, etc.) are intercepted before execution and
+    require explicit confirmation.  The agent will be told to ask the user to run
+    the command manually instead.
+
     Args:
         command: Shell command to execute (runs in the current working directory).
         timeout: Maximum seconds to wait before giving up (default 60).
     """
+    if shell.is_dangerous(command):
+        return (
+            "⚠ BLOCKED: this command matches a destructive pattern "
+            "(rm -rf, sudo rm, dd, mkfs, curl|sh, fork bomb, etc.).  "
+            "Ask the user to confirm and run it manually instead of via this tool."
+        )
     return shell.run_command(command, timeout=timeout)
 
 

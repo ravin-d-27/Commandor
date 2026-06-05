@@ -4,15 +4,17 @@ Handles:
   - Direct shell command execution (subprocess in worker thread)
   - AI commands via /slash syntax: /agent, /chat, /ask, /plan, /assist
   - /setup interactive wizard (multi-step state machine)
-  - /provider, /model, /providers, /sessions sub-commands
+  - /provider, /model, /providers, /sessions, /api sub-commands
   - Command history (Up/Down)
   - CWD tracking (cd handled specially)
+  - Ctrl+C abort of the running AI worker
 """
 
 from __future__ import annotations
 
 import os
 import subprocess
+import threading
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -174,6 +176,7 @@ class TerminalWidget(Widget):
     BINDINGS = [
         Binding("up", "history_prev", "Previous command", priority=True, show=False),
         Binding("down", "history_next", "Next command", priority=True, show=False),
+        Binding("ctrl+c", "abort_ai", "Abort AI", priority=True, show=False),
     ]
 
     def __init__(
@@ -208,6 +211,7 @@ class TerminalWidget(Widget):
         self._stream_tokens: list[str] = []
         self._think_tokens: list[str] = []
         self._ai_worker = None
+        self._ai_cancel_event: threading.Event = threading.Event()
 
         # Context / retry / export state
         self._last_ai_task: Optional[str] = None
@@ -599,6 +603,8 @@ class TerminalWidget(Widget):
 
     def _work_stream(self, task: str, mode: str) -> None:
         """Worker: iterate stream_agent_events and dispatch to UI thread."""
+        # Reset cancellation flag for this run
+        self._ai_cancel_event.clear()
         for event in stream_agent_events(
             task,
             mode=mode,
@@ -607,6 +613,8 @@ class TerminalWidget(Widget):
             thread_id=self._session_id,
             session_name=self._session_name,
         ):
+            if self._ai_cancel_event.is_set():
+                break
             self.app.call_from_thread(self._on_ai_event, event)
 
     def _on_ai_event(self, event) -> None:  # noqa: ANN001
@@ -1222,6 +1230,52 @@ class TerminalWidget(Widget):
         elif len(matches) > 1:
             log = self.query_one("#log", RichLog)
             log.write(Text("  " + "   ".join(matches), style="#7a6b4a"))
+
+    # ------------------------------------------------------------------
+    # Abort running AI worker (Ctrl+C)
+    # ------------------------------------------------------------------
+
+    def action_abort_ai(self) -> None:
+        """Cancel the currently running AI worker, if any.
+
+        No-op if the user is just typing in the input field and no AI is
+        active.  Pressing Ctrl+C always clears the input field first (a
+        common terminal convention), so the agent has to be running for
+        this to be a real abort.
+        """
+        inp = self.query_one("#cmd-input", Input)
+        if self._ai_worker is not None and self._ai_worker.is_running:
+            # Signal the streaming loop to stop processing further events.
+            # This won't kill the in-flight LLM HTTP call, but it stops
+            # the worker from dispatching any more events to the UI.
+            self._ai_cancel_event.set()
+            try:
+                self._ai_worker.cancel()
+            except Exception:
+                pass
+            self._ai_worker = None
+            log = self.query_one("#log", RichLog)
+            preview = self.query_one("#stream-preview", Static)
+            preview.display = False
+            log.write(Text.from_markup(
+                "  [#cc2200]■  AI worker aborted by user (Ctrl+C)[/#cc2200]"
+            ))
+            self._plan_items = []
+            self._plan_done = set()
+            try:
+                self.query_one("#plan-panel", Static).display = False
+            except Exception:
+                pass
+        else:
+            # No AI running — fall back to "clear current input"
+            if inp.value:
+                inp.value = ""
+
+    def _is_ai_cancelled(self) -> bool:
+        """Check (and reset) the AI cancellation event."""
+        if self._ai_cancel_event.is_set():
+            return True
+        return False
 
 
 # ---------------------------------------------------------------------------
