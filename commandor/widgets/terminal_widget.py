@@ -166,7 +166,7 @@ HELP_TEXT = """\
 |---------|-------------|
 | `/retry` | Re-run the last AI command |
 | `/reset` | Clear conversation memory (new thread) |
-| `/export [file]` | Save session as markdown file |
+| `/export [md|json|html] [file]` | Save session — markdown (default), JSON, or HTML |
 
 ## Shell
 Any command that doesn't start with `/` is run as a shell command.
@@ -1014,24 +1014,59 @@ class TerminalWidget(Widget):
 
     def _cmd_export(self, arg: str, log: RichLog) -> None:
         from datetime import datetime
+        from ..utils.exporter import export_for_format
+
         if not self._conversation_log:
             log.write(Text("  No conversation to export.", style="#7a6b4a"))
             return
-        filename = arg.strip() if arg else f"commandor-{datetime.now():%Y%m%d-%H%M%S}.md"
-        if not filename.endswith(".md"):
+
+        # Parse: /export [fmt] [filename]
+        # Examples:
+        #   /export                       → markdown with default filename
+        #   /export my-session            → markdown → my-session.md
+        #   /export json                  → JSON with default filename
+        #   /export html report.html      → explicit filename
+        parts = arg.split() if arg else []
+        fmt = "md"
+        filename = ""
+        if parts and parts[0].lower() in ("md", "markdown", "json", "html"):
+            fmt = parts[0].lower()
+            parts = parts[1:]
+        if parts:
+            filename = " ".join(parts)
+
+        if not filename:
+            ext = "md" if fmt in ("md", "markdown") else fmt
+            filename = f"commandor-{datetime.now():%Y%m%d-%H%M%S}.{ext}"
+
+        # Ensure extension matches the format
+        if fmt in ("md", "markdown") and not filename.endswith((".md", ".markdown")):
             filename += ".md"
+        elif fmt == "json" and not filename.endswith(".json"):
+            filename += ".json"
+        elif fmt == "html" and not filename.endswith((".html", ".htm")):
+            filename += ".html"
+
         path = Path(self._cwd) / filename
-        lines = ["# Commandor Session Export\n\n"]
-        if self._session_name:
-            lines.append(f"**Session:** {self._session_name}\n\n")
-        lines.append(f"**Exported:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n---\n\n")
-        for entry in self._conversation_log:
-            if entry["role"] == "user":
-                lines.append(f"## ▸ {entry.get('mode', 'agent').upper()}\n\n{entry['content']}\n\n")
-            elif entry["role"] == "ai":
-                lines.append(f"## ◆ Commandor\n\n{entry['content']}\n\n---\n\n")
-        path.write_text("".join(lines))
-        log.write(Text(f"  ✓ Exported to: {path}", style="#d4a017"))
+        metadata = {
+            "provider": (self._provider or get_config().config.default_provider or ""),
+            "model":    (self._model or ""),
+        }
+        try:
+            content, _ = export_for_format(
+                fmt, self._conversation_log, self._session_name, metadata
+            )
+        except ValueError as exc:
+            log.write(Text(f"  {exc}", style="#cc2200"))
+            return
+
+        try:
+            path.write_text(content, encoding="utf-8")
+        except OSError as exc:
+            log.write(Text(f"  Failed to write export: {exc}", style="#cc2200"))
+            return
+
+        log.write(Text(f"  ✓ Exported ({fmt}) to: {path}", style="#d4a017"))
 
     def _cmd_pipe(self, arg: str, log: RichLog) -> None:
         if not arg:
