@@ -471,6 +471,9 @@ class TerminalWidget(Widget):
         elif cmd == "/pipe":
             self._cmd_pipe(arg, log)
 
+        elif cmd == "/diff":
+            self._cmd_diff(arg, log)
+
         elif cmd == "/api":
             self._cmd_api(arg, log)
 
@@ -820,11 +823,41 @@ class TerminalWidget(Widget):
         log.write(Text(f"  ✓ Model set to: {self._model}", style="#d4a017"))
 
     # ------------------------------------------------------------------
+    # /diff — show git working-tree diff in the terminal
+    # ------------------------------------------------------------------
+
+    def _cmd_diff(self, arg: str, log: RichLog) -> None:
+        """Show the git diff in the TUI.
+
+        Usage:
+            /diff            — full working-tree diff
+            /diff <path>     — diff of a single file or directory
+            /diff --staged   — show staged (cached) changes
+        """
+        from ..utils.git_ops import get_git_diff, is_git_repo
+
+        if not is_git_repo():
+            log.write(Text("  Not a git repository.", style="#cc2200"))
+            return
+
+        parts = arg.split() if arg else []
+        staged = False
+        path = ""
+        for p in parts:
+            if p in ("--staged", "--cached"):
+                staged = True
+            else:
+                path = p
+
+        result = get_git_diff(path=path or None, staged=staged)
+        log.write(Text.from_markup(result))
+
+    # ------------------------------------------------------------------
     # /api  — interactive provider/key management
     # ------------------------------------------------------------------
 
     def _cmd_api(self, arg: str, log: RichLog) -> None:
-        """Forward to APIManager: /api [show|set|model|test|remove|default ...]"""
+        """Forward to APIManager: /api [show|set|model|url|test|remove|default ...]"""
         from ..api_manager import APIManager  # local import — heavy Rich setup
 
         mgr = APIManager()

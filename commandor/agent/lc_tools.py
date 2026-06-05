@@ -13,6 +13,7 @@ from langchain_core.tools import tool
 
 from ..utils import file_ops, shell, web_ops
 from ..utils.diff_display import display_diff
+from ..utils.git_ops import git_commit, git_log, get_git_status, is_git_repo
 from ..utils.ignore import IgnoreMatcher
 
 
@@ -504,6 +505,63 @@ def http_request_tool(
 
 
 # ---------------------------------------------------------------------------
+# Git tools
+# ---------------------------------------------------------------------------
+
+@tool
+def git_status_tool() -> str:
+    """Return a short git status report (current branch, staged/unstaged files).
+
+    Returns 'Not a git repository' if the working directory is not inside one.
+    """
+    if not is_git_repo():
+        return "Not a git repository."
+    return get_git_status()
+
+
+@tool
+def git_diff_tool(path: str = "", staged: bool = False) -> str:
+    """Show the git diff (working tree by default; pass staged=True for staged).
+
+    Args:
+        path:   Optional file path filter (e.g. 'src/foo.py').  Empty = whole tree.
+        staged: If True, show staged-but-not-committed changes.
+    """
+    if not is_git_repo():
+        return "Not a git repository."
+    return get_git_diff(path=path or None, staged=staged)
+
+
+@tool
+def git_commit_tool(message: str, add_all: bool = False, amend: bool = False) -> str:
+    """Create a git commit with the given message.
+
+    Refuses to commit with an empty message.  Set add_all=True to first
+    stage every modified/deleted/untracked file.  Set amend=True to
+    amend the previous commit (rewrites history — use with care).
+
+    Args:
+        message: Commit message.  Should be a one-line summary; multi-line
+                 messages are allowed but the first line is the subject.
+        add_all: If True, run 'git add -A' before committing.
+        amend:   If True, amend the previous commit instead of creating a new one.
+    """
+    if not message or not message.strip():
+        return "Refused to commit with an empty message."
+    return git_commit(message=message, add_all=add_all, amend=amend)
+
+
+@tool
+def git_log_tool(n: int = 10) -> str:
+    """Show the last *n* commits (default 10).
+
+    Args:
+        n: Number of commits to show.
+    """
+    return git_log(n=n)
+
+
+# ---------------------------------------------------------------------------
 # Task-tracking tools (signal the TUI to render / update the plan panel)
 # ---------------------------------------------------------------------------
 
@@ -585,6 +643,10 @@ ALL_TOOLS = [
     get_environment_tool,
     fetch_url_tool,
     http_request_tool,
+    git_status_tool,
+    git_diff_tool,
+    git_commit_tool,
+    git_log_tool,
     create_task_plan,
     complete_task,
 ]
