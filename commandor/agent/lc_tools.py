@@ -11,7 +11,7 @@ from typing import List, Optional
 
 from langchain_core.tools import tool
 
-from ..utils import file_ops, shell
+from ..utils import file_ops, shell, web_ops
 from ..utils.diff_display import display_diff
 
 
@@ -347,6 +347,69 @@ def get_environment_tool() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Network tools
+# ---------------------------------------------------------------------------
+
+@tool
+def fetch_url_tool(url: str, timeout: int = 30, max_chars: int = 50000) -> str:
+    """Fetch a web page and return its text content (HTML tags stripped).
+
+    Use this to read documentation, blog posts, Stack Overflow answers,
+    GitHub READMEs, API references, or any other public web page.  Returns
+    plain text only — no images, scripts, or styling.
+
+    Only http:// and https:// URLs are allowed.  Local file://, gopher://,
+    and similar schemes are rejected for safety.
+
+    For POST / PUT / DELETE / generic HTTP, use http_request_tool.
+
+    Args:
+        url:       Full http(s) URL to fetch.
+        timeout:   Seconds to wait before giving up (default 30).
+        max_chars: Maximum number of characters to return (default 50000).
+    """
+    return web_ops.fetch_url(url, timeout=timeout, max_chars=max_chars)
+
+
+@tool
+def http_request_tool(
+    method: str,
+    url: str,
+    headers: Optional[dict] = None,
+    body: str = "",
+    timeout: int = 30,
+    max_chars: int = 50000,
+) -> str:
+    """Send a generic HTTP request (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS).
+
+    Use this to interact with REST APIs, webhooks, or any HTTP service.
+    JSON request bodies are detected and sent with Content-Type:
+    application/json automatically.  Only http:// and https:// URLs
+    are allowed.
+
+    The response is returned as a formatted block: status line, content
+    type, and the body (HTML stripped, JSON pretty-printed).
+
+    Args:
+        method:    HTTP verb — GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS.
+        url:       Target URL.
+        headers:   Optional dict of extra request headers (e.g. Authorization).
+        body:      Optional request body as a string.  If it parses as JSON,
+                   it is sent as application/json.
+        timeout:   Seconds before giving up (default 30).
+        max_chars: Maximum response characters (default 50000).
+    """
+    return web_ops.http_request(
+        method=method,
+        url=url,
+        headers=headers,
+        body=body,
+        timeout=timeout,
+        max_chars=max_chars,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Task-tracking tools (signal the TUI to render / update the plan panel)
 # ---------------------------------------------------------------------------
 
@@ -426,6 +489,8 @@ ALL_TOOLS = [
     get_project_files_tool,
     get_git_info_tool,
     get_environment_tool,
+    fetch_url_tool,
+    http_request_tool,
     create_task_plan,
     complete_task,
 ]
