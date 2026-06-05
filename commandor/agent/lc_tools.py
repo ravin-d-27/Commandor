@@ -16,6 +16,7 @@ from ..utils.diff_display import display_diff
 from ..utils.diff_side_by_side import display_side_by_side_diff
 from ..utils.git_ops import git_commit, git_log, get_git_status, is_git_repo
 from ..utils.ignore import IgnoreMatcher
+from .subagent import delegate_task, parallel_delegate
 
 # Side-by-side diff is opt-in via env var; default is the unified view used
 # by the executor (which prints to a non-TTY console that can't do columns).
@@ -577,6 +578,81 @@ def git_log_tool(n: int = 10) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Sub-agent delegation tools
+# ---------------------------------------------------------------------------
+
+@tool
+def delegate_task_tool(subtask: str, use_tools: bool = False) -> str:
+    """Delegate a focused subtask to a short-lived sub-agent.
+
+    A sub-agent runs in its own graph with its own thread_id, gets only
+    the base system prompt (no parent history), and returns a single
+    string answer.  Use this to:
+
+      - Get a second opinion on a design decision
+      - Perform a parallel code review while you keep working
+      - Run a focused lookup / analysis without polluting the main context
+      - Hand off an entire sub-task ("write unit tests for module X")
+
+    The sub-agent uses the same provider/model as the parent unless
+    overridden.  Its checkpoint thread is deleted on completion so the
+    sub-agent's memory does not accumulate.
+
+    Args:
+        subtask:   Self-contained instruction.  Don't reference prior
+                   conversation context — the sub-agent can't see it.
+        use_tools: If True, the sub-agent gets the same tools as the
+                   parent.  Default False (chat-only) is faster and
+                   cheaper for lookups, summaries, and analysis.
+    """
+    return delegate_task(subtask=subtask, use_tools=use_tools)
+
+
+@tool
+def parallel_delegate_tool(tasks: list) -> str:
+    """Run multiple sub-tasks concurrently and return their answers.
+
+    Each task is a self-contained instruction.  Up to 4 sub-agents run
+    in parallel; the rest are queued.  Use this for fan-out work like
+    "review these 3 PRs" or "look up docs for A, B, C in parallel".
+
+    Args:
+        tasks: A list of task strings, OR a list of dicts of the form
+               {"subtask": "...", "use_tools": False}.  Strings are
+               treated as chat-only sub-tasks.
+
+    Returns:
+        A formatted block with one section per sub-task, in the same
+        order as the input.
+    """
+    if not tasks:
+        return "Error: empty task list."
+
+    # Normalise input — accept either strings or dicts
+    normalised: list[dict] = []
+    for t in tasks:
+        if isinstance(t, str):
+            normalised.append({"subtask": t, "use_tools": False})
+        elif isinstance(t, dict):
+            normalised.append({
+                "subtask": t.get("subtask", ""),
+                "use_tools": bool(t.get("use_tools", False)),
+            })
+        else:
+            return f"Error: each task must be a string or dict, got {type(t).__name__}"
+
+    results = parallel_delegate(normalised)
+
+    out: list[str] = []
+    for i, r in enumerate(results, 1):
+        marker = "[green]✓[/green]" if r["ok"] else "[red]✗[/red]"
+        out.append(f"{marker} Task {i}: {r['subtask'][:80]}")
+        out.append(r["answer"])
+        out.append("")  # blank line between tasks
+    return "\n".join(out).rstrip()
+
+
+# ---------------------------------------------------------------------------
 # Task-tracking tools (signal the TUI to render / update the plan panel)
 # ---------------------------------------------------------------------------
 
@@ -662,6 +738,8 @@ ALL_TOOLS = [
     git_diff_tool,
     git_commit_tool,
     git_log_tool,
+    delegate_task_tool,
+    parallel_delegate_tool,
     create_task_plan,
     complete_task,
 ]
