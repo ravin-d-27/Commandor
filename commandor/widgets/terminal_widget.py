@@ -49,11 +49,20 @@ from ..session_manager import SessionManager
 
 _PROVIDERS = ("gemini", "anthropic", "openai", "openrouter")
 
-_AI_CMDS = {"/agent", "/chat"}
+# Providers that require an API key (skip during /setup key entry if missing)
+# Currently all 4 built-in providers require a key; local providers will be
+# added in a follow-up commit.
+_PROVIDERS_REQUIRING_KEY = {
+    "gemini", "anthropic", "openai", "openrouter",
+}
+
+_AI_CMDS = {"/agent", "/chat", "/assist", "/plan"}
 
 _MODE_MAP = {
     "/agent": "agent",
     "/chat": "chat",
+    "/assist": "assist",
+    "/plan": "plan",
 }
 
 # Context window limits per model (tokens)
@@ -78,9 +87,10 @@ _MODEL_CTX_LIMITS: dict[str, int] = {
 }
 
 _ALL_SLASH_CMDS = sorted([
-    "/agent", "/chat", "/clear",
-    "/export", "/help", "/model", "/pipe", "/provider",
-    "/providers", "/reset", "/retry", "/sessions", "/setup",
+    "/agent", "/assist", "/chat", "/clear", "/diff",
+    "/export", "/help", "/model", "/pipe", "/plan",
+    "/provider", "/providers", "/reset", "/retry",
+    "/sessions", "/setup",
 ])
 
 _HISTORY_FILE = Path.home() / ".commandor" / "history"
@@ -93,6 +103,8 @@ HELP_TEXT = """\
 | Command | Description |
 |---------|-------------|
 | `/agent <task>` | Run the AI agent (plans, uses tools, executes autonomously) |
+| `/assist <task>` | Agent mode with confirmations before each tool call |
+| `/plan <task>` | Plan first, then execute the approved plan |
 | `/chat <message>` | Conversational Q&A — no tools, just reasoning |
 
 ## Provider / Model
@@ -123,8 +135,10 @@ HELP_TEXT = """\
 |---------|-------------|
 | `/help` | Show this help |
 | `/clear` | Clear the terminal |
+| `/diff` | Show git diff of the working tree |
 | `/pipe <cmd> [pipe] <prompt>` | Pipe shell output to AI |
 | `Ctrl+L` | Clear the terminal |
+| `Ctrl+C` | Abort the running AI worker |
 | `Ctrl+Q` | Quit |
 | `Up / Down` | Navigate command history |
 | `Tab` | Auto-complete slash commands |
@@ -436,6 +450,9 @@ class TerminalWidget(Widget):
 
         elif cmd == "/pipe":
             self._cmd_pipe(arg, log)
+
+        elif cmd == "/api":
+            self._cmd_api(arg, log)
 
         elif cmd.startswith("/"):
             log.write(Text(f"  Unknown command: {cmd}  (try /help)", style="#cc2200"))
@@ -779,6 +796,71 @@ class TerminalWidget(Widget):
         log.write(Text(f"  ✓ Model set to: {self._model}", style="#d4a017"))
 
     # ------------------------------------------------------------------
+    # /api  — interactive provider/key management
+    # ------------------------------------------------------------------
+
+    def _cmd_api(self, arg: str, log: RichLog) -> None:
+        """Forward to APIManager: /api [show|set|model|test|remove|default ...]"""
+        from ..api_manager import APIManager  # local import — heavy Rich setup
+
+        mgr = APIManager()
+        parts = arg.split() if arg else []
+        sub = parts[0].lower() if parts else ""
+
+        if not sub or sub == "show":
+            mgr.show_status()
+            return
+
+        if sub == "set" and len(parts) >= 3:
+            mgr.set_key(parts[1], " ".join(parts[2:]))
+            return
+
+        if sub == "model" and len(parts) >= 3:
+            mgr.set_model(parts[1], parts[2])
+            return
+
+        if sub == "test":
+            if len(parts) >= 2:
+                mgr.test_provider(parts[1])
+            else:
+                mgr.test_all()
+            return
+
+        if sub == "remove" and len(parts) >= 2:
+            mgr.remove_key(parts[1])
+            return
+
+        if sub == "default" and len(parts) >= 2:
+            mgr.set_default(parts[1])
+            return
+
+        log.write(Text("  Usage: /api [show|set|model|test|remove|default ...]", style="#7a6b4a"))
+        log.write(Text(
+            "    /api show                       show all providers",
+            style="#7a6b4a",
+        ))
+        log.write(Text(
+            "    /api set <provider> <key>       save an API key",
+            style="#7a6b4a",
+        ))
+        log.write(Text(
+            "    /api model <provider> <model>   set default model",
+            style="#7a6b4a",
+        ))
+        log.write(Text(
+            "    /api test [provider]            test connectivity",
+            style="#7a6b4a",
+        ))
+        log.write(Text(
+            "    /api remove <provider>          clear a stored key",
+            style="#7a6b4a",
+        ))
+        log.write(Text(
+            "    /api default <provider>         set the active default",
+            style="#7a6b4a",
+        ))
+
+    # ------------------------------------------------------------------
     # /sessions
     # ------------------------------------------------------------------
 
@@ -965,14 +1047,22 @@ class TerminalWidget(Widget):
             pcfg = cfg.get_provider_config(provider_arg)
             model = pcfg.default_model if pcfg else ""
             log.write(Text(f"  ⚙  Setup: {provider_arg}  (model: {model})", style="#ffd700"))
-            log.write(Text("  Enter your API key (or press Enter to skip):", style="#f5ecd0"))
-            inp.placeholder = f"{provider_arg.upper()}_API_KEY"
+            if provider_arg in _PROVIDERS_REQUIRING_KEY:
+                log.write(Text("  Enter your API key (or press Enter to skip):", style="#f5ecd0"))
+                inp.placeholder = f"{provider_arg.upper()}_API_KEY"
+            else:
+                # Local providers don't need a key — go straight to model entry
+                log.write(Text(f"  {provider_arg} runs locally — no API key required.", style="#7a6b4a"))
+                log.write(Text("  Enter default model (e.g. llama3.1, qwen2.5-coder):", style="#f5ecd0"))
+                inp.placeholder = "model-name"
+                self._setup_state["step"] = "model_entry"
         else:
             self._setup_state = {"step": "provider_choice"}
             log.write(Text("  ⚙  Commandor Setup Wizard", style="bold #ffd700"))
             log.write(Text("  Available providers:", style="#f5ecd0"))
             for p in _PROVIDERS:
-                log.write(Text(f"    • {p}", style="#c8a800"))
+                tag = "" if p in _PROVIDERS_REQUIRING_KEY else "  [local]"
+                log.write(Text(f"    • {p}{tag}", style="#c8a800"))
             log.write(Text("  Which provider do you want to configure?", style="#f5ecd0"))
             inp.placeholder = "gemini / anthropic / openai / openrouter"
 
@@ -999,15 +1089,22 @@ class TerminalWidget(Widget):
                 log.write(Text("  Which provider?", style="#f5ecd0"))
                 return
             state["provider"] = name
-            state["step"] = "key_entry"
             cfg = get_config()
             pcfg = cfg.get_provider_config(name)
             existing = pcfg.api_key if pcfg else None
-            if existing:
-                log.write(Text(f"  Key already set for {name}. Enter new key to replace, or press Enter to keep.", style="#7a6b4a"))
+            if name in _PROVIDERS_REQUIRING_KEY:
+                state["step"] = "key_entry"
+                if existing:
+                    log.write(Text(f"  Key already set for {name}. Enter new key to replace, or press Enter to keep.", style="#7a6b4a"))
+                else:
+                    log.write(Text(f"  Enter API key for {name} (press Enter to skip):", style="#f5ecd0"))
+                inp.placeholder = f"{name.upper()}_API_KEY"
             else:
-                log.write(Text(f"  Enter API key for {name} (press Enter to skip):", style="#f5ecd0"))
-            inp.placeholder = f"{name.upper()}_API_KEY"
+                # Local / keyless provider → jump straight to model entry
+                state["step"] = "model_entry"
+                log.write(Text(f"  {name} runs locally — no API key required.", style="#7a6b4a"))
+                log.write(Text("  Enter default model (e.g. llama3.1, qwen2.5-coder):", style="#f5ecd0"))
+                inp.placeholder = "model-name"
 
         elif step == "key_entry":
             provider = state["provider"]
@@ -1031,6 +1128,19 @@ class TerminalWidget(Widget):
                 cfg.set_default_provider(provider)
                 self._provider = provider
                 log.write(Text(f"  ✓ Default provider set to: {provider}", style="#d4a017"))
+            state["step"] = "another_choice"
+            log.write(Text("  Configure another provider? (y/n)", style="#f5ecd0"))
+            inp.placeholder = "y / n"
+
+        elif step == "model_entry":
+            provider = state["provider"]
+            model = value.strip()
+            if model:
+                cfg = get_config()
+                cfg.set_provider_model(provider, model)
+                log.write(Text(f"  ✓ Default model for {provider} set to: {model}", style="#d4a017"))
+            else:
+                log.write(Text(f"  Skipped model for {provider}", style="#7a6b4a"))
             state["step"] = "another_choice"
             log.write(Text("  Configure another provider? (y/n)", style="#f5ecd0"))
             inp.placeholder = "y / n"
