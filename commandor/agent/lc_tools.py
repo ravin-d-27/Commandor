@@ -13,8 +13,23 @@ from langchain_core.tools import tool
 
 from ..utils import file_ops, shell, web_ops
 from ..utils.diff_display import display_diff
+from ..utils.diff_side_by_side import display_side_by_side_diff
 from ..utils.git_ops import git_commit, git_log, get_git_status, is_git_repo
 from ..utils.ignore import IgnoreMatcher
+
+# Side-by-side diff is opt-in via env var; default is the unified view used
+# by the executor (which prints to a non-TTY console that can't do columns).
+def _show_diff(path: str, old: str, new: str) -> None:
+    """Display a file mutation diff.
+
+    Uses the side-by-side renderer in a TTY; falls back to unified when the
+    console is too narrow or Pygments is unavailable.
+    """
+    import os as _os
+    if _os.environ.get("COMMANDOR_SIDE_BY_SIDE_DIFF", "0") == "1":
+        display_side_by_side_diff(path, old, new)
+    else:
+        display_diff(path, old, new)
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +152,7 @@ def write_file_tool(path: str, content: str) -> str:
         result = file_ops.write_file(path, content, create_dirs=True)
     except OSError as e:
         return f"Error writing file: {e}"
-    display_diff(path, old_content, content)
+    _show_diff(path, old_content, content)
     return result
 
 
@@ -180,7 +195,7 @@ def edit_file_tool(path: str, old: str, new: str) -> str:
     except (FileNotFoundError, OSError):
         new_content = old_content.replace(old, new, 1)
 
-    display_diff(path, old_content, new_content)
+    _show_diff(path, old_content, new_content)
     return result
 
 
@@ -245,7 +260,7 @@ def patch_file_tool(path: str, diff: str) -> str:
     except (FileNotFoundError, OSError):
         new_content = old_content
 
-    display_diff(path, old_content, new_content)
+    _show_diff(path, old_content, new_content)
     return f"Patch applied successfully to {path}."
 
 
