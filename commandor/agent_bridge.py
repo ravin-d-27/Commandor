@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Generator, Optional
 
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
@@ -36,6 +37,7 @@ from .agent.lc_graph import (
 )
 from .agent.lc_models import build_model
 from .agent.lc_tools import ALL_TOOLS, _plan_tls
+from .utils.multimodal import build_multimodal_message, is_image_file
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +236,7 @@ def stream_agent_events(
     model: Optional[str] = None,
     thread_id: Optional[str] = None,
     session_name: Optional[str] = None,
+    image_paths: Optional[list[str]] = None,
 ) -> Generator:
     """Stream agent execution events for a Textual worker thread.
 
@@ -250,6 +253,9 @@ def stream_agent_events(
         model:        Model ID. Defaults to provider default.
         thread_id:    Session UUID for conversation memory.
         session_name: Human-readable name shown in UI headers.
+        image_paths:  Optional list of local image paths to attach to the
+                      first user message as multimodal content.  The chosen
+                      model must support vision for this to be useful.
     """
     try:
         resolved_provider, api_key, resolved_model, resolved_base_url = _resolve_provider_model(
@@ -283,19 +289,39 @@ def stream_agent_events(
     yield StatusEvent(message=f"{effective_mode}  ·  {resolved_model}"
                       + (f"  ·  {session_name}" if session_name else ""))
 
+    # Build the first user message — multimodal if any images are attached.
+    # Filter out non-image paths so callers can pass a generous list.
+    valid_images = [p for p in (image_paths or []) if is_image_file(p)]
+    invalid = [p for p in (image_paths or []) if not is_image_file(p)]
+    if invalid:
+        yield StatusEvent(
+            message=f"⚠ Skipped {len(invalid)} non-image attachment(s): "
+                    + ", ".join(Path(p).name for p in invalid[:3])
+        )
+
+    if valid_images:
+        try:
+            content_blocks = build_multimodal_message(task, valid_images)
+            first_message = HumanMessage(content=content_blocks)
+        except (FileNotFoundError, ValueError) as exc:
+            yield ErrorEvent(message=f"Failed to attach image: {exc}")
+            return
+    else:
+        first_message = HumanMessage(content=task)
+
     try:
         plan_queue: list = []
         _plan_tls.queue = plan_queue
         if effective_mode == "chat":
             graph = build_chat_graph(llm, system_prompt)
-            input_data = {"messages": [HumanMessage(content=task)]}
+            input_data = {"messages": [first_message]}
             yield from _iter_graph(graph, input_data, config, metrics)
             state = graph.get_state(config)
 
         else:  # agent (default)
             hook = _make_summarize_hook(llm, metrics)
             graph = build_agent_graph(llm, ALL_TOOLS, system_prompt, pre_model_hook=hook)
-            input_data = {"messages": [HumanMessage(content=task)]}
+            input_data = {"messages": [first_message]}
             yield from _iter_graph(graph, input_data, config, metrics, plan_queue=plan_queue)
             state = graph.get_state(config)
 

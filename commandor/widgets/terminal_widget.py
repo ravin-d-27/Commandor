@@ -106,7 +106,7 @@ _MODEL_CTX_LIMITS: dict[str, int] = {
 
 _ALL_SLASH_CMDS = sorted([
     "/agent", "/assist", "/chat", "/clear", "/diff",
-    "/export", "/help", "/model", "/pipe", "/plan",
+    "/export", "/help", "/image", "/model", "/pipe", "/plan",
     "/provider", "/providers", "/reset", "/retry",
     "/sessions", "/setup",
 ])
@@ -154,6 +154,9 @@ HELP_TEXT = """\
 | `/help` | Show this help |
 | `/clear` | Clear the terminal |
 | `/diff` | Show git diff of the working tree |
+| `/image <path> [path ...]` | Attach an image (vision) to the next AI run |
+| `/image clear` | Detach all images |
+| `/image list` | List attached images |
 | `/pipe <cmd> [pipe] <prompt>` | Pipe shell output to AI |
 | `Ctrl+L` | Clear the terminal |
 | `Ctrl+C` | Abort the running AI worker |
@@ -239,6 +242,9 @@ class TerminalWidget(Widget):
         # Plan tracking state
         self._plan_items: list = []
         self._plan_done: set = set()
+
+        # Multimodal attachments (image paths to send with the next AI run)
+        self._attached_images: list[str] = []
 
     # ------------------------------------------------------------------
     # Compose
@@ -474,6 +480,9 @@ class TerminalWidget(Widget):
         elif cmd == "/diff":
             self._cmd_diff(arg, log)
 
+        elif cmd == "/image":
+            self._cmd_image(arg, log)
+
         elif cmd == "/api":
             self._cmd_api(arg, log)
 
@@ -592,12 +601,19 @@ class TerminalWidget(Widget):
             log.write(Text("  ◈  AI is already running. Please wait.", style="#cc2200"))
             return
 
+        # Snapshot attached images BEFORE the run so the list can be mutated
+        # safely during streaming.
+        images_snapshot = list(self._attached_images)
+
         # Track for /retry
         self._last_ai_task = task
         self._last_ai_mode = mode
 
-        # Log to conversation history for /export
-        self._conversation_log.append({"role": "user", "content": task, "mode": mode})
+        # Log to conversation history for /export (mention attached images)
+        log_entry: dict = {"role": "user", "content": task, "mode": mode}
+        if images_snapshot:
+            log_entry["attachments"] = list(images_snapshot)
+        self._conversation_log.append(log_entry)
 
         # Auto-name session from first task (slug from first 5 words)
         if self._session_name is None:
@@ -608,19 +624,28 @@ class TerminalWidget(Widget):
         self._stream_tokens = []
         self._think_tokens = []
 
+        # Clear attachments — single-use (one AI run consumes them)
+        self._attached_images = []
+
         # Immediate visual feedback — user sees activity before first event arrives
         preview = self.query_one("#stream-preview", Static)
         preview.display = True
-        preview.update(Text("  ◈  Thinking…", style="#7a6b4a"))
+        if images_snapshot:
+            preview.update(Text(
+                f"  ◈  Thinking… ({len(images_snapshot)} image attached)",
+                style="#7a6b4a",
+            ))
+        else:
+            preview.update(Text("  ◈  Thinking…", style="#7a6b4a"))
 
         self._ai_worker = self.run_worker(
-            lambda: self._work_stream(task, mode),
+            lambda: self._work_stream(task, mode, images_snapshot),
             thread=True,
             exclusive=False,
             name="ai",
         )
 
-    def _work_stream(self, task: str, mode: str) -> None:
+    def _work_stream(self, task: str, mode: str, image_paths: Optional[list[str]] = None) -> None:
         """Worker: iterate stream_agent_events and dispatch to UI thread."""
         # Reset cancellation flag for this run
         self._ai_cancel_event.clear()
@@ -631,6 +656,7 @@ class TerminalWidget(Widget):
             model=self._model,
             thread_id=self._session_id,
             session_name=self._session_name,
+            image_paths=image_paths,
         ):
             if self._ai_cancel_event.is_set():
                 break
@@ -851,6 +877,112 @@ class TerminalWidget(Widget):
 
         result = get_git_diff(path=path or None, staged=staged)
         log.write(Text.from_markup(result))
+
+    # ------------------------------------------------------------------
+    # /image — attach images to the next AI run (multimodal)
+    # ------------------------------------------------------------------
+
+    def _cmd_image(self, arg: str, log: RichLog) -> None:
+        """Attach / detach images to be sent with the next AI run.
+
+        Usage:
+            /image <path> [path ...]   attach one or more images
+            /image list                show currently attached images
+            /image clear               detach all images
+            /image drop <index>        remove a single attachment (1-based)
+        """
+        from ..utils.multimodal import is_image_file  # local import
+
+        parts = arg.split() if arg else []
+        if not parts:
+            self._show_attached_images(log)
+            return
+
+        sub = parts[0].lower()
+
+        if sub == "list":
+            self._show_attached_images(log)
+            return
+
+        if sub == "clear":
+            n = len(self._attached_images)
+            self._attached_images = []
+            log.write(Text(
+                f"  ✓ Detached {n} image(s).", style="#d4a017"
+            ))
+            return
+
+        if sub == "drop" and len(parts) >= 2:
+            try:
+                idx = int(parts[1]) - 1
+            except ValueError:
+                log.write(Text(
+                    f"  /image drop expects a 1-based index, got: {parts[1]}",
+                    style="#cc2200",
+                ))
+                return
+            if 0 <= idx < len(self._attached_images):
+                removed = self._attached_images.pop(idx)
+                log.write(Text(
+                    f"  ✓ Detached: {removed}", style="#d4a017"
+                ))
+            else:
+                log.write(Text(
+                    f"  Index out of range (have {len(self._attached_images)}).",
+                    style="#cc2200",
+                ))
+            return
+
+        # Default: treat all parts as image paths
+        added = []
+        skipped = []
+        for p in parts:
+            abs_p = p if os.path.isabs(p) else os.path.join(self._cwd, p)
+            if not os.path.exists(abs_p):
+                skipped.append((p, "not found"))
+                continue
+            if not is_image_file(abs_p):
+                skipped.append((p, "not an image"))
+                continue
+            if abs_p in self._attached_images:
+                continue  # already attached
+            self._attached_images.append(abs_p)
+            added.append(abs_p)
+
+        for path in added:
+            log.write(Text(
+                f"  ✓ Attached: [bold #ffd700]{os.path.basename(path)}[/bold #ffd700]",
+                style="#d4a017",
+            ))
+        for path, reason in skipped:
+            log.write(Text(
+                f"  ✗ Skipped {path}: {reason}", style="#cc2200"
+            ))
+
+        if added:
+            log.write(Text(
+                f"  {len(self._attached_images)} image(s) will be sent with the next /agent or /chat.",
+                style="#7a6b4a",
+            ))
+
+    def _show_attached_images(self, log: RichLog) -> None:
+        if not self._attached_images:
+            log.write(Text(
+                "  No images attached. Use /image <path> to add one.",
+                style="#7a6b4a",
+            ))
+            return
+        log.write(Text(
+            f"  Attached images ({len(self._attached_images)}):", style="bold #f5ecd0"
+        ))
+        for i, p in enumerate(self._attached_images, 1):
+            log.write(Text.from_markup(
+                f"    [#c8a800]{i}.[/#c8a800]  {p}"
+            ))
+        log.write(Text(
+            "  They will be sent with the next /agent, /chat, /assist, or /plan call.",
+            style="#7a6b4a",
+        ))
 
     # ------------------------------------------------------------------
     # /api  — interactive provider/key management

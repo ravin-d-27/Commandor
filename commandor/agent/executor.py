@@ -569,9 +569,26 @@ def _stream_graph(
 # Mode runners
 # ---------------------------------------------------------------------------
 
+def _build_first_message(task: str, image_paths: Optional[list[str]] = None):
+    """Build the first HumanMessage, with multimodal content if images are given."""
+    from ..utils.multimodal import build_multimodal_message, is_image_file  # noqa: PLC0415
+
+    valid = [p for p in (image_paths or []) if is_image_file(p)]
+    if not valid:
+        return HumanMessage(content=task)
+    try:
+        content = build_multimodal_message(task, valid)
+        return HumanMessage(content=content)
+    except (FileNotFoundError, ValueError) as exc:
+        # Fall back to text-only on error so the run still proceeds
+        _rc.print(f"[yellow]⚠ Could not attach image: {exc}[/yellow]")
+        return HumanMessage(content=task)
+
+
 def _run_agent(
     llm, task: str, system_prompt: str, config: dict,
     verbose: bool, metrics: dict, session_name: Optional[str] = None,
+    image_paths: Optional[list[str]] = None,
 ) -> AgentResult:
     """Fully autonomous agent run (streaming)."""
     _print_run_header("agent", metrics.get("model", ""), session_name)
@@ -579,7 +596,8 @@ def _run_agent(
 
     hook = _make_summarize_hook(llm, metrics)
     graph = build_agent_graph(llm, ALL_TOOLS, system_prompt, pre_model_hook=hook)
-    _stream_graph(graph, {"messages": [HumanMessage(content=task)]}, config, metrics)
+    first_message = _build_first_message(task, image_paths)
+    _stream_graph(graph, {"messages": [first_message]}, config, metrics)
 
     state = graph.get_state(config)
     metrics["approx_tokens"] = _approx_tokens(state.values.get("messages", []))
@@ -595,13 +613,15 @@ def _run_agent(
 def _run_chat(
     llm, task: str, system_prompt: str, config: dict,
     verbose: bool, metrics: dict, session_name: Optional[str] = None,
+    image_paths: Optional[list[str]] = None,
 ) -> AgentResult:
     """Chat-only (no tools) run (streaming)."""
     _print_run_header("chat", metrics.get("model", ""), session_name)
     t0 = time.monotonic()
 
     graph = build_chat_graph(llm, system_prompt)
-    _stream_graph(graph, {"messages": [HumanMessage(content=task)]}, config, metrics)
+    first_message = _build_first_message(task, image_paths)
+    _stream_graph(graph, {"messages": [first_message]}, config, metrics)
 
     state = graph.get_state(config)
     metrics["approx_tokens"] = _approx_tokens(state.values.get("messages", []))
@@ -857,18 +877,22 @@ def run_agent(
     thread_id: Optional[str] = None,
     verbose: bool = True,
     session_name: Optional[str] = None,
+    image_paths: Optional[list[str]] = None,
 ) -> AgentResult:
     """Run an agent task in the specified mode.
 
     Args:
         task:         The user's request / instruction.
         mode:         One of 'agent', 'chat', 'assist', 'plan'.
-        provider:     AI provider ('gemini', 'anthropic', 'openai', 'openrouter').
+        provider:     AI provider ('gemini', 'anthropic', 'openai', 'openrouter',
+                      'ollama', 'groq', 'deepseek', 'openai_compat').
                       Defaults to the configured default provider.
         model:        Model identifier. Defaults to the provider's default model.
         thread_id:    Conversation thread ID for memory continuity.
         verbose:      Whether to print progress messages.
         session_name: Human-readable session name shown in the run header.
+        image_paths:  Optional list of image paths for multimodal input.
+                      The chosen model must support vision for this to be useful.
 
     Returns:
         AgentResult with success flag and final_answer text.
@@ -894,9 +918,9 @@ def run_agent(
         metrics: dict = {"model": resolved_model, "condensations": 0}
 
         if mode == "agent":
-            return _run_agent(llm, task, system_prompt, config, verbose, metrics, session_name)
+            return _run_agent(llm, task, system_prompt, config, verbose, metrics, session_name, image_paths)
         elif mode == "chat":
-            return _run_chat(llm, task, system_prompt, config, verbose, metrics, session_name)
+            return _run_chat(llm, task, system_prompt, config, verbose, metrics, session_name, image_paths)
         elif mode == "assist":
             return _run_assist(llm, task, system_prompt, config, verbose, metrics, session_name)
         elif mode == "plan":
@@ -921,7 +945,7 @@ def run_agent(
                     )
                     return run_agent(task, mode=mode, provider=provider, model=model,
                                      thread_id=thread_id, verbose=verbose,
-                                     session_name=session_name)
+                                     session_name=session_name, image_paths=image_paths)
             except Exception:
                 pass
         return AgentResult(

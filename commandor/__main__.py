@@ -51,6 +51,13 @@ def main():
         help="Model to use"
     )
     parser.add_argument(
+        "--image",
+        action="append",
+        default=[],
+        help="Attach an image to the first message (vision models only). "
+             "May be passed multiple times.",
+    )
+    parser.add_argument(
         "--setup",
         action="store_true",
         help="Run interactive setup"
@@ -90,7 +97,8 @@ def main():
                 task,
                 mode=mode,
                 provider=args.provider,
-                model=args.model
+                model=args.model,
+                image_paths=args.image or None,
             )
 
             if result.success:
