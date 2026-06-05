@@ -89,11 +89,13 @@ _rc = Console()
 # ---------------------------------------------------------------------------
 
 def _build_system_prompt() -> str:
-    """Inject live context (cwd, git) into the base system prompt."""
+    """Inject live context (cwd, git, .commandorignore) into the base system prompt."""
     from ..utils.shell import get_git_info, get_working_directory  # noqa: PLC0415
+    from ..utils.ignore import IgnoreMatcher  # noqa: PLC0415
 
     cwd = get_working_directory()
     git = get_git_info()
+    matcher = IgnoreMatcher(base_dir=cwd)
 
     context_block = (
         f"\n## Current context\n"
@@ -102,6 +104,15 @@ def _build_system_prompt() -> str:
         f"- NEVER create project files in the Commandor tool directory — always `cd_tool` into a dedicated project directory first\n"
         f"- Git: {git}\n"
     )
+    if matcher.pattern_count > 0:
+        context_block += (
+            f"\n## File protection\n"
+            f"A `.commandorignore` file is active ({matcher.summary()}).  "
+            f"Files matched by its patterns are off-limits — read_file_tool, "
+            f"write_file_tool, edit_file_tool, glob_tool, grep_tool and "
+            f"get_project_files_tool will refuse to touch them.  Respect the "
+            f"user's privacy: do not attempt workarounds.\n"
+        )
     return SYSTEM_PROMPT + context_block
 
 

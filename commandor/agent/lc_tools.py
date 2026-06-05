@@ -13,6 +13,7 @@ from langchain_core.tools import tool
 
 from ..utils import file_ops, shell, web_ops
 from ..utils.diff_display import display_diff
+from ..utils.ignore import IgnoreMatcher
 
 
 # ---------------------------------------------------------------------------
@@ -22,6 +23,35 @@ from ..utils.diff_display import display_diff
 # ---------------------------------------------------------------------------
 
 _plan_tls = threading.local()
+
+# Module-level ignore matcher.  Initialized lazily on first use; the agent's
+# system prompt is updated to reflect the active source.
+_ignore_matcher: Optional[IgnoreMatcher] = None
+
+
+def _get_ignore_matcher() -> IgnoreMatcher:
+    """Return the process-wide IgnoreMatcher (created on first use)."""
+    global _ignore_matcher
+    if _ignore_matcher is None:
+        _ignore_matcher = IgnoreMatcher()
+    return _ignore_matcher
+
+
+def _deny_if_ignored(path: str, op: str) -> Optional[str]:
+    """If *path* is matched by .commandorignore, return an error message.
+
+    Returns None when the path is allowed.
+    """
+    matcher = _get_ignore_matcher()
+    if matcher.pattern_count == 0:
+        return None
+    if matcher.is_ignored(path):
+        return (
+            f"Refused to {op} '{path}': path is matched by .commandorignore "
+            f"(rules: {matcher.summary()}).  Ask the user to remove the rule "
+            f"or pass an unignored path before retrying."
+        )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +72,10 @@ def read_file_tool(path: str, onset: int = 0, offset: Optional[int] = None) -> s
         offset: Last line to read, 0-indexed **inclusive** (default = end of file).
     """
     try:
+        denied = _deny_if_ignored(path, "read")
+        if denied:
+            return denied
+
         p = Path(path)
         if not p.exists():
             return f"Error: File not found: {path}"
@@ -88,6 +122,10 @@ def write_file_tool(path: str, content: str) -> str:
         content: Full content to write to the file. Must be the complete file
                  content (not a diff or partial update).
     """
+    denied = _deny_if_ignored(path, "write")
+    if denied:
+        return denied
+
     # Capture old content before overwriting
     try:
         old_content = Path(path).read_text(encoding="utf-8")
@@ -120,6 +158,10 @@ def edit_file_tool(path: str, old: str, new: str) -> str:
         old: The exact text to find and replace (must exist verbatim in the file).
         new: The replacement text.
     """
+    denied = _deny_if_ignored(path, "edit")
+    if denied:
+        return denied
+
     # Capture old content before editing
     try:
         old_content = Path(path).read_text(encoding="utf-8")
@@ -220,12 +262,15 @@ def glob_tool(pattern: str, path: str = ".") -> str:
     - '*.ts'      — TypeScript files in the current directory only
     - 'src/**/*'  — everything under src/
 
+    Files matched by .commandorignore are filtered out automatically.
+
     Args:
         pattern: Glob pattern such as '**/*.py' or '*.ts'.
         path: Directory to search in (defaults to current working directory).
     """
     try:
-        return file_ops.glob_files(pattern, path)
+        result = file_ops.glob_files(pattern, path)
+        return _filter_ignored_from_text_list(result, path, pattern)
     except (FileNotFoundError, ValueError, OSError) as e:
         return f"Error: {e}"
 
@@ -235,7 +280,8 @@ def grep_tool(pattern: str, path: str = ".", file_pattern: str = "*") -> str:
     """Search for a regex pattern inside file contents.
 
     Use this to find where a function, class, variable, or string is defined
-    or referenced across a project.
+    or referenced across a project.  Files matched by .commandorignore
+    are skipped automatically.
 
     Args:
         pattern: Regular expression to search for (e.g. 'def my_func', 'TODO', 'import os').
@@ -243,9 +289,55 @@ def grep_tool(pattern: str, path: str = ".", file_pattern: str = "*") -> str:
         file_pattern: Glob pattern to filter files (e.g. '*.py', '*.ts', '*.json').
     """
     try:
-        return file_ops.search_in_files(pattern, path, file_pattern)
+        result = file_ops.search_in_files(pattern, path, file_pattern)
+        return _filter_ignored_from_text_list(result, path, "*")
     except (FileNotFoundError, ValueError, OSError) as e:
         return f"Error: {e}"
+
+
+def _filter_ignored_from_text_list(text: str, base: str, _pattern: str) -> str:
+    """Drop lines from a glob/grep result that reference ignored files.
+
+    The existing helpers return a list of paths or path:line entries.  We
+    keep the heading line ("Found N file(s):") and filter the body.
+    """
+    matcher = _get_ignore_matcher()
+    if matcher.pattern_count == 0:
+        return text
+
+    lines = text.splitlines()
+    if not lines:
+        return text
+
+    # The first line is a header like "Found 12 file(s):" or "Found 5 match(es):"
+    header = lines[0]
+    body = lines[1:]
+
+    base_path = Path(base).resolve() if base and base != "." else Path.cwd()
+
+    kept: list[str] = []
+    for line in body:
+        # Extract the first whitespace-delimited token (the path)
+        candidate = line.lstrip(" ").lstrip("\t").split(":", 1)[0].split()[0:1]
+        if not candidate:
+            kept.append(line)
+            continue
+        first = candidate[0]
+        try:
+            abs_p = (base_path / first).resolve() if not Path(first).is_absolute() else Path(first)
+        except OSError:
+            abs_p = Path(first)
+        if not matcher.is_ignored(str(abs_p)):
+            kept.append(line)
+
+    # Update the header count to reflect filtering
+    if "match(es):" in header or "file(s):" in header:
+        new_count = len(kept)
+        header = header.split(":")[0] + f":  ({new_count} shown, some ignored)"
+
+    if not kept:
+        return header + "\n  (all results matched by .commandorignore)"
+    return "\n".join([header, *kept])
 
 
 @tool
@@ -326,6 +418,8 @@ def cd_tool(path: str) -> str:
 @tool
 def get_project_files_tool(extensions: Optional[List[str]] = None) -> str:
     """List all source files in the project, filtered by extension.
+
+    Files matched by .commandorignore are excluded automatically.
 
     Args:
         extensions: Optional list of file extensions to include,
