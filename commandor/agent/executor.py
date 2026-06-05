@@ -37,21 +37,21 @@ from .lc_graph import (
     build_chat_graph,
     get_checkpointer,
 )
-from .lc_models import build_model
+from .lc_models import PROVIDER_DEFAULTS, build_model
 from .lc_tools import ALL_TOOLS, DANGEROUS_TOOL_NAMES
 
-_rc = Console()
+# Local / keyless providers don't require a real API key
+_KEYLESS_PROVIDERS = {"ollama"}
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _resolve_provider_model(
     provider: Optional[str],
     model: Optional[str],
-) -> tuple[str, str, str]:
-    """Return (provider_name, api_key, model_id), filling gaps from config."""
+) -> tuple[str, str, str, Optional[str]]:
+    """Return (provider_name, api_key, model_id, base_url), filling gaps from config.
+
+    For keyless providers (e.g. ollama) a placeholder key is supplied.
+    """
     cfg = get_config()
 
     if provider is None:
@@ -60,17 +60,33 @@ def _resolve_provider_model(
     pconfig = cfg.get_provider_config(provider)
 
     if model is None:
-        model = pconfig.default_model if pconfig else "gemini-2.5-flash"
-
-    api_key = get_api_key(provider)
-    if not api_key:
-        raise ValueError(
-            f"No API key found for provider '{provider}'. "
-            "Run /setup or set the appropriate environment variable."
+        model = pconfig.default_model if pconfig and pconfig.default_model else (
+            PROVIDER_DEFAULTS.get(provider, {}).get("model", "gemini-2.5-flash")
         )
 
-    return provider, api_key, model
+    if provider in _KEYLESS_PROVIDERS:
+        api_key = "ollama"  # placeholder; ollama ignores the key
+    else:
+        api_key = get_api_key(provider)
+        if not api_key:
+            raise ValueError(
+                f"No API key found for provider '{provider}'. "
+                "Run /setup or set the appropriate environment variable."
+            )
 
+    base_url = (
+        pconfig.base_url if pconfig and pconfig.base_url
+        else PROVIDER_DEFAULTS.get(provider, {}).get("base_url")
+    )
+
+    return provider, api_key, model, base_url
+
+_rc = Console()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _build_system_prompt() -> str:
     """Inject live context (cwd, git) into the base system prompt."""
@@ -838,10 +854,12 @@ def run_agent(
         AgentResult with success flag and final_answer text.
     """
     try:
-        resolved_provider, api_key, resolved_model = _resolve_provider_model(
+        resolved_provider, api_key, resolved_model, resolved_base_url = _resolve_provider_model(
             provider, model
         )
-        llm = build_model(resolved_provider, api_key, resolved_model)
+        llm = build_model(
+            resolved_provider, api_key, resolved_model, base_url=resolved_base_url
+        )
         system_prompt = _build_system_prompt()
 
         resolved_tid = thread_id or str(uuid.uuid4())
@@ -895,18 +913,28 @@ run_agent_interactive = run_agent
 def test_providers() -> dict:
     """Test which providers have valid API keys configured."""
     results = {}
-    providers = ["gemini", "anthropic", "openai", "openrouter"]
+    providers = [
+        "gemini", "anthropic", "openai", "openrouter",
+        "ollama", "groq", "deepseek", "openai_compat",
+    ]
 
     for name in providers:
-        key = get_api_key(name)
-        if not key:
-            results[name] = {"status": "no_api_key"}
-            continue
+        if name in _KEYLESS_PROVIDERS:
+            key = "ollama"
+        else:
+            key = get_api_key(name)
+            if not key:
+                results[name] = {"status": "no_api_key"}
+                continue
         try:
             cfg = get_config()
             pconfig = cfg.get_provider_config(name)
             m = pconfig.default_model if pconfig else ""
-            llm = build_model(name, key, m)
+            base_url = (
+                pconfig.base_url if pconfig and pconfig.base_url
+                else PROVIDER_DEFAULTS.get(name, {}).get("base_url")
+            )
+            llm = build_model(name, key, m, base_url=base_url)
             llm.invoke("ping")
             results[name] = {"status": "ok"}
         except Exception as e:

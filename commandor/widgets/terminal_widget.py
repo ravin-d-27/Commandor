@@ -49,13 +49,16 @@ from ..session_manager import SessionManager
 # Constants
 # ---------------------------------------------------------------------------
 
-_PROVIDERS = ("gemini", "anthropic", "openai", "openrouter")
+_PROVIDERS = (
+    "gemini", "anthropic", "openai", "openrouter",
+    "ollama", "groq", "deepseek", "openai_compat",
+)
 
-# Providers that require an API key (skip during /setup key entry if missing)
-# Currently all 4 built-in providers require a key; local providers will be
-# added in a follow-up commit.
+# Providers that require an API key (skip during /setup key entry if missing).
+# 'ollama' runs locally and does not need a key.
 _PROVIDERS_REQUIRING_KEY = {
     "gemini", "anthropic", "openai", "openrouter",
+    "groq", "deepseek", "openai_compat",
 }
 
 _AI_CMDS = {"/agent", "/chat", "/assist", "/plan"}
@@ -86,6 +89,19 @@ _MODEL_CTX_LIMITS: dict[str, int] = {
     "anthropic/claude-3.5-sonnet": 200_000,
     "openai/gpt-4o": 128_000,
     "google/gemini-2.5-pro": 2_097_152,
+    # Ollama defaults (overridable per-model)
+    "llama3.1": 128_000,
+    "llama3.2": 128_000,
+    "qwen2.5-coder": 32_000,
+    "deepseek-coder-v2": 128_000,
+    "codellama": 16_000,
+    # Groq
+    "llama-3.3-70b-versatile": 128_000,
+    "llama-3.1-70b-versatile": 131_072,
+    "mixtral-8x7b-32768": 32_768,
+    # DeepSeek
+    "deepseek-chat": 64_000,
+    "deepseek-reasoner": 64_000,
 }
 
 _ALL_SLASH_CMDS = sorted([
@@ -827,6 +843,10 @@ class TerminalWidget(Widget):
             mgr.set_model(parts[1], parts[2])
             return
 
+        if sub == "url" and len(parts) >= 3:
+            mgr.set_base_url(parts[1], " ".join(parts[2:]))
+            return
+
         if sub == "test":
             if len(parts) >= 2:
                 mgr.test_provider(parts[1])
@@ -842,7 +862,7 @@ class TerminalWidget(Widget):
             mgr.set_default(parts[1])
             return
 
-        log.write(Text("  Usage: /api [show|set|model|test|remove|default ...]", style="#7a6b4a"))
+        log.write(Text("  Usage: /api [show|set|model|url|test|remove|default ...]", style="#7a6b4a"))
         log.write(Text(
             "    /api show                       show all providers",
             style="#7a6b4a",
@@ -853,6 +873,10 @@ class TerminalWidget(Widget):
         ))
         log.write(Text(
             "    /api model <provider> <model>   set default model",
+            style="#7a6b4a",
+        ))
+        log.write(Text(
+            "    /api url <provider> <url>       set base URL (ollama, deepseek, openai_compat)",
             style="#7a6b4a",
         ))
         log.write(Text(
@@ -1072,7 +1096,7 @@ class TerminalWidget(Widget):
                 tag = "" if p in _PROVIDERS_REQUIRING_KEY else "  [local]"
                 log.write(Text(f"    • {p}{tag}", style="#c8a800"))
             log.write(Text("  Which provider do you want to configure?", style="#f5ecd0"))
-            inp.placeholder = "gemini / anthropic / openai / openrouter"
+            inp.placeholder = "gemini / anthropic / openai / openrouter / ollama / groq / deepseek"
 
     def _handle_setup_input(self, value: str) -> None:
         log = self.query_one("#log", RichLog)
@@ -1157,7 +1181,7 @@ class TerminalWidget(Widget):
             if value.strip().lower() in ("y", "yes"):
                 self._setup_state = {"step": "provider_choice"}
                 log.write(Text("  Which provider do you want to configure?", style="#f5ecd0"))
-                inp.placeholder = "gemini / anthropic / openai / openrouter"
+                inp.placeholder = "gemini / anthropic / openai / openrouter / ollama / groq / deepseek"
             else:
                 self._setup_state = None
                 inp.placeholder = ""

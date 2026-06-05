@@ -252,7 +252,7 @@ def stream_agent_events(
         session_name: Human-readable name shown in UI headers.
     """
     try:
-        resolved_provider, api_key, resolved_model = _resolve_provider_model(
+        resolved_provider, api_key, resolved_model, resolved_base_url = _resolve_provider_model(
             provider, model
         )
     except ValueError as e:
@@ -260,7 +260,9 @@ def stream_agent_events(
         return
 
     try:
-        llm = build_model(resolved_provider, api_key, resolved_model)
+        llm = build_model(
+            resolved_provider, api_key, resolved_model, base_url=resolved_base_url
+        )
     except Exception as e:
         yield ErrorEvent(message=f"Failed to initialise model: {e}")
         return
