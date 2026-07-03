@@ -16,16 +16,32 @@
 
 ## ✨ Why Commandor?
 
+Commandor keeps coding work inside one terminal surface: describe a task in
+plain English, attach files with `@`, let the agent inspect and edit the project,
+and keep shell/git/session workflows close at hand. It is built for practical
+developer loops rather than a separate chat window.
+
 ---
 
 ## 🎯 Agent Modes
 
-Commandor offers two distinct interaction modes:
+Commandor defaults to natural agent tasks in the TUI. Type what you want done,
+or use slash commands when you want a specific mode.
 
 | Mode | Command | Description |
 |------|---------|-------------|
-| **Agent** | `/agent <task>` | Autonomous AI that uses all available tools to complete tasks. The AI decides how to accomplish the goal and executes autonomously. |
+| **Agent** | Plain text or `/agent <task>` | Autonomous AI that uses all available tools to complete tasks. The AI decides how to accomplish the goal and executes autonomously. |
+| **Assist** | `/assist <task>` | Agent mode with confirmation before tool execution. |
+| **Plan** | `/plan <task>` | Generate a plan first, then execute after approval. |
 | **Chat** | `/chat <message>` | Pure conversation — no tool access. Use for questions, explanations, code reviews, or brainstorming. |
+
+### What's new in 0.3.0
+- Natural TUI input: plain messages run as agent tasks by default.
+- `@` file references with live file suggestions and Tab completion.
+- More providers: Ollama, Groq, DeepSeek, and OpenAI-compatible endpoints.
+- Plugin tools via the `commandor.tools` entry-point group.
+- Sub-agent delegation tools for focused or parallel work.
+- Web/HTTP, git, multimodal image, JSON/HTML export, `.commandorignore`, and side-by-side diff support.
 
 ---
 
@@ -35,15 +51,19 @@ Commandor offers two distinct interaction modes:
 Inline file contents directly into your prompts without manual copying:
 
 ```bash
-/agent refactor this function: @src/utils.py
-/agent write tests for @app/models.py
+refactor this function: @src/utils.py
+write tests for @app/models.py
 /chat explain @Dockerfile
 ```
 
 Supports glob patterns too:
 ```bash
-/agent fix all type errors in @**/*.py
+fix all type errors in @**/*.py
 ```
+
+In the TUI, type `@` to browse project files. Continue typing to narrow the list
+and press Tab to complete the active file reference. Paths with spaces are
+inserted as quoted references, for example `@"docs/My File.md"`.
 
 ### Persistent Sessions
 - **Auto-save**: Every conversation is automatically saved with a unique thread ID
@@ -71,6 +91,10 @@ Commandor works with the leading AI providers. Configure one or all:
 | **Anthropic Claude** | `claude-3-5-sonnet-20241022`, `claude-3-7-sonnet-20250219`, `claude-3-opus-20240229`, `claude-3-5-haiku-20241022` | `ANTHROPIC_API_KEY` |
 | **OpenAI GPT** | `gpt-4o`, `gpt-4o-mini`, `gpt-4-turbo`, `o1`, `o3-mini` | `OPENAI_API_KEY` |
 | **OpenRouter** | 100+ models (including `anthropic/claude-3.5-sonnet`, `google/gemini-2.5-pro`) | `OPENROUTER_API_KEY` |
+| **Ollama** | Local models such as `llama3.1`, `qwen2.5-coder`, `codellama` | No API key; local Ollama server |
+| **Groq** | `llama-3.3-70b-versatile`, `mixtral-8x7b-32768` | `GROQ_API_KEY` |
+| **DeepSeek** | `deepseek-chat`, `deepseek-reasoner` | `DEEPSEEK_API_KEY` |
+| **OpenAI-compatible** | LM Studio, vLLM, llama.cpp server, custom endpoints | Base URL + optional key |
 
 Switch providers on the fly with `/provider <name>` and models with `/model <id>`.
 
@@ -99,9 +123,17 @@ The agent has access to a comprehensive toolkit for software development:
 - **`get_git_info_tool`** — Git status, branch, recent commits
 - **`get_environment_tool`** — OS, Python version, shell, user info
 
+### Web, Git & Delegation
+- **`fetch_url_tool`** — Fetch web pages as text for documentation and research
+- **`http_request_tool`** — Send HTTP requests to APIs and webhooks
+- **`git_status_tool`**, **`git_diff_tool`**, **`git_commit_tool`**, **`git_log_tool`** — Inspect and manage git state
+- **`delegate_task_tool`** — Spawn a focused sub-agent for a self-contained task
+- **`parallel_delegate_tool`** — Run multiple focused sub-agent tasks concurrently
+
 ### Session & Project
 - **`get_project_files_tool`** — Enumerate project source files
 - Session management via `/sessions` commands (see below)
+- Plugin tools loaded from installed packages using the `commandor.tools` entry-point group
 
 All tools include **rich diff displays** when modifying files, so you always see exactly what changed.
 
@@ -111,7 +143,7 @@ All tools include **rich diff displays** when modifying files, so you always see
 
 ### Prerequisites
 - Python 3.9 or higher
-- API key from at least one supported provider (Gemini, Anthropic, OpenAI, or OpenRouter)
+- API key from at least one hosted provider, or a local Ollama server for keyless local models
 
 ### From PyPI (Recommended)
 ```bash
@@ -205,6 +237,8 @@ export GEMINI_API_KEY="your-key"
 export ANTHROPIC_API_KEY="your-key"
 export OPENAI_API_KEY="your-key"
 export OPENROUTER_API_KEY="your-key"
+export GROQ_API_KEY="your-key"
+export DEEPSEEK_API_KEY="your-key"
 ```
 
 ---
@@ -218,25 +252,28 @@ commandor
 ```
 
 Features:
-- Single-pane terminal: shell commands and AI chat coexist
+- Single-pane terminal: natural agent tasks, shell commands, and AI chat coexist
 - Real-time streaming of AI responses and tool outputs
 - Command history (↑/↓)
-- Tab completion for slash commands
+- Tab completion for slash commands and `@` file references
 - Rich syntax highlighting and markdown rendering
 
 **Quick start:**
 ```bash
-# Run a shell command
-ls -la
+# Ask the agent naturally
+read the unit tests and explain the structure
 
 # Ask a question
 /chat what's the difference between async/await and threads?
 
 # Autonomous task
-/agent refactor this codebase to use type hints
+refactor this codebase to use type hints
 
 # Use file references
-/agent write tests for @src/main.py
+write tests for @src/main.py
+
+# Run a shell command
+$ ls -la
 ```
 
 ### Command-Line Mode (Non-Interactive)
@@ -271,7 +308,10 @@ commandor --chat "explain quantum computing" -p openai -m o1
 
 | Command | Mode | Description |
 |---------|------|-------------|
+| Plain text | Agent | Execute a task naturally using all tools |
 | `/agent <task>` | Agent | Execute task independently using all tools |
+| `/assist <task>` | Assist | Execute with confirmations before tool calls |
+| `/plan <task>` | Plan | Produce a plan before execution |
 | `/chat <message>` | Chat | Conversational Q&A (no tools) |
 | `/retry` | Any | Re-run the last AI command |
 | `/reset` | Any | Clear conversation memory, start fresh session |
@@ -281,8 +321,12 @@ commandor --chat "explain quantum computing" -p openai -m o1
 | Command | Description |
 |---------|-------------|
 | `/providers` | List all providers with configuration status |
-| `/provider <name>` | Switch active provider (gemini, anthropic, openai, openrouter) |
+| `/provider <name>` | Switch active provider (`gemini`, `anthropic`, `openai`, `openrouter`, `ollama`, `groq`, `deepseek`, `openai_compat`) |
 | `/model <id>` | Set model for current provider (e.g., `claude-3-7-sonnet-20250219`) |
+| `/api show` | Show provider configuration |
+| `/api set <provider> <key>` | Save an API key |
+| `/api url <provider> <url>` | Set a custom provider base URL |
+| `/api test [provider]` | Test provider connectivity |
 
 ### Session Management
 
@@ -309,38 +353,42 @@ commandor --chat "explain quantum computing" -p openai -m o1
 
 | Command | Description |
 |---------|-------------|
-| `/export [filename]` | Save conversation as Markdown (default: `commandor-YYYYMMDD-HHMMSS.md`) |
+| `/diff [--staged] [path]` | Show git diff in the TUI |
+| `/image <path> [path ...]` | Attach image(s) to the next AI run |
+| `/plugins [reload]` | List or reload plugin tools |
+| `/export [md|json|html] [filename]` | Save conversation as Markdown, JSON, or HTML |
 
 ---
 
 ### Shell Commands
 
-Any input that **doesn't start with `/`** is executed as a shell command in the current working directory.
+Plain text runs the agent. Prefix shell commands with `$ ` or `!` to execute
+them in the current working directory.
 
 Special handling:
-- `cd <path>` — Changes the working directory natively (no subprocess). Supports `~`, relative paths, and environment variable expansion.
+- `$ cd <path>` — Changes the working directory natively (no subprocess). Supports `~`, relative paths, and environment variable expansion.
 - All other commands run in your default shell (`$SHELL` or `/bin/bash`)
 
 Examples:
 ```bash
 # Navigate
-cd ~/projects/myapp
+$ cd ~/projects/myapp
 
 # Git operations
-git status
-git diff HEAD~1
+$ git status
+$ git diff HEAD~1
 
 # Package managers
-npm install
-pip install -r requirements.txt
+$ npm install
+$ pip install -r requirements.txt
 
 # Build & test
-pytest tests/
-python -m pytest --cov
+$ pytest tests/
+$ python -m pytest --cov
 
 # Project exploration
-find . -name "*.py" | head -20
-ls -R | grep ".js"
+$ find . -name "*.py" | head -20
+$ ls -R | grep ".js"
 ```
 
 ---
@@ -360,7 +408,7 @@ ls -R | grep ".js"
 | Key | Action |
 |-----|--------|
 | `↑ / ↓` | Navigate command history |
-| `Tab` | Auto-complete slash commands |
+| `Tab` | Auto-complete slash commands and active `@` file references |
 | `Ctrl+L` | Clear screen |
 | `Ctrl+Q` | Quit |
 
@@ -386,7 +434,7 @@ When usage exceeds 80% of the context window, Commandor **automatically summariz
 ### Configuration Schema
 
 ```yaml
-# Default provider (gemini, anthropic, openai, openrouter)
+# Default provider (gemini, anthropic, openai, openrouter, ollama, groq, deepseek, openai_compat)
 default_provider: openrouter
 
 # Provider-specific settings
@@ -410,6 +458,30 @@ providers:
     enabled: true
     api_key: null
     default_model: anthropic/claude-3.5-sonnet
+    base_url: https://openrouter.ai/api/v1
+
+  ollama:
+    enabled: true
+    api_key: null
+    default_model: llama3.1
+    base_url: http://localhost:11434
+
+  groq:
+    enabled: true
+    api_key: null
+    default_model: llama-3.3-70b-versatile
+
+  deepseek:
+    enabled: true
+    api_key: null
+    default_model: deepseek-chat
+    base_url: https://api.deepseek.com/v1
+
+  openai_compat:
+    enabled: true
+    api_key: null
+    default_model: local-model
+    base_url: http://localhost:1234/v1
 
 # Agent behavior
 agent:
@@ -452,6 +524,8 @@ docker run -it \
   -e ANTHROPIC_API_KEY=your_key \
   -e OPENAI_API_KEY=your_key \
   -e OPENROUTER_API_KEY=your_key \
+  -e GROQ_API_KEY=your_key \
+  -e DEEPSEEK_API_KEY=your_key \
   ravind2704/commandor
 ```
 
@@ -493,25 +567,33 @@ Commandor/
 │   │   ├── lc_graph.py           # LangGraph factory (build_agent_graph, etc.)
 │   │   ├── lc_models.py          # build_model() — provider model factory
 │   │   ├── lc_tools.py           # All @tool-decorated functions
+│   │   ├── plugins.py            # Entry-point plugin discovery
+│   │   ├── subagent.py           # Delegate/parallel sub-agent execution
 │   │   └── modes.py              # Mode descriptions
 │   │
 │   ├── providers/                # AI provider integrations
 │   │   ├── __init__.py
 │   │   └── base.py               # AgentResult dataclass, provider base
-│   │   # Note: Provider-specific logic (gemini, anthropic, openai, openrouter)
-│   │   # is handled by LangChain integrations in agent/lc_models.py
+│   │   # Provider-specific logic is handled by LangChain integrations in agent/lc_models.py
 │   │
 │   ├── utils/                    # Utility modules
 │   │   ├── __init__.py
+│   │   ├── diff_side_by_side.py  # Side-by-side syntax-highlighted diffs
+│   │   ├── exporter.py           # Markdown/JSON/HTML export helpers
 │   │   ├── file_ops.py           # Low-level file read/write/edit/patch
+│   │   ├── git_ops.py            # Git status/diff/log/commit helpers
+│   │   ├── ignore.py             # .commandorignore matcher
+│   │   ├── multimodal.py         # Image encoding for vision models
 │   │   ├── shell.py              # Shell execution, cd, git, env info
+│   │   ├── tokenizer.py          # tiktoken-based token counting
+│   │   ├── web_ops.py            # URL fetch and HTTP request helpers
 │   │   └── diff_display.py       # Rich diff rendering for file changes
 │   │
 │   └── widgets/                  # Textual UI components
 │       ├── __init__.py
 │       └── terminal_widget.py    # Main unified terminal (shell + AI)
 │
-├── tests/                        # Test suite (if exists)
+├── tests/                        # Pytest suite
 ├── pyproject.toml                # Modern Python packaging
 ├── setup.py                      # Legacy setuptools (still used for install)
 ├── requirements.txt              # Dev dependencies (optional)
@@ -528,8 +610,8 @@ Commandor/
 - Thread IDs scoped by mode: `{mode}_{uuid}` to separate chat/agent/plan histories
 
 **Provider Integration:**
-- All provider logic (Gemini, Anthropic, OpenAI, OpenRouter) is in `agent/lc_models.py`
-- Uses LangChain's `ChatGoogleGenerativeAI`, `ChatAnthropic`, `ChatOpenAI` integrations
+- Provider logic for Gemini, Anthropic, OpenAI, OpenRouter, Ollama, Groq, DeepSeek, and OpenAI-compatible endpoints is in `agent/lc_models.py`
+- Uses LangChain's `ChatGoogleGenerativeAI`, `ChatAnthropic`, `ChatOpenAI`, `ChatOllama`, and `ChatGroq` integrations
 - No separate provider modules — single factory function `build_model()` handles all providers
 
 **Streaming Pipeline:**
@@ -561,13 +643,13 @@ Commandor/
 /chat show me the contents of @commandor/config.py
 
 # Create a new module
-/agent create a new module @utils/helpers.py with functions for validation
+create a new module @utils/helpers.py with functions for validation
 
 # Edit a file
-/agent in @app/main.py, replace the print statement with proper logging
+in @app/main.py, replace the print statement with proper logging
 
 # Apply a patch
-/agent apply this diff to @src/components/Button.tsx:
+apply this diff to @src/components/Button.tsx:
 # --- a/src/components/Button.tsx
 # +++ b/src/components/Button.tsx
 # @@ -10,7 +10,7 @@
@@ -578,7 +660,7 @@ Commandor/
 ### Project Exploration
 ```bash
 # Find all test files
-/agent find all test files in the project
+find all test files in the project
 
 # Search for a function
 /chat where is the authenticate_user function defined?
@@ -590,19 +672,19 @@ Commandor/
 ### Shell + AI Hybrid
 ```bash
 # Check git status first
-git status
+$ git status
 
 # Then ask AI to fix conflicts
-/agent resolve the git conflicts in @src/auth.py
+resolve the git conflicts in @src/auth.py
 
 # Run tests, then fix failures
-pytest tests/ -v
-/agent fix the failing tests and re-run
+$ pytest tests/ -v
+fix the failing tests and re-run
 ```
 
 ### Complex Agent Task
 ```bash
-/agent implement OAuth2 login
+implement OAuth2 login
 
 # The agent will autonomously:
 # 1. Explore the codebase
@@ -614,7 +696,7 @@ pytest tests/ -v
 ### Session Management
 ```bash
 # Start a task
-/agent implement OAuth2 login
+implement OAuth2 login
 
 # Name it for later
 /sessions save oauth-login
@@ -715,7 +797,7 @@ pytest --cov=commandor
 # Quick interactive test
 commandor
 /setup  # configure a provider
-/agent create a simple Python hello world script
+create a simple Python hello world script
 ```
 
 ### Test provider connectivity
@@ -791,10 +873,9 @@ Contributions are **welcome** and **appreciated**!
    - Open a PR with clear description
 
 ### Areas Needing Help
-- [ ] Support for more providers (Groq, Together, etc.)
-- [ ] Enhanced diff viewer (side-by-side, syntax highlighting)
-- [ ] Export formats (JSON, HTML, PDF)
-- [ ] Plugin system for custom tools
+- [ ] PDF export
+- [ ] More plugin examples and templates
+- [ ] Provider presets for Together, Mistral, and other OpenAI-compatible APIs
 - [ ] Windows-specific improvements
 - [ ] Performance optimizations for large repos
 - [ ] Better error recovery and retry logic

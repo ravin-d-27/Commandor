@@ -1,6 +1,6 @@
 """LangGraph-based agent executor.
 
-Public API (backward-compatible with terminal.py):
+Public API (kept backward-compatible for legacy callers):
     run_agent(task, mode, provider, model, thread_id, verbose, session_name) -> AgentResult
     run_agent_interactive(task, mode, provider, model, thread_id) -> AgentResult
     test_providers() -> dict
@@ -37,21 +37,25 @@ from .lc_graph import (
     build_chat_graph,
     get_checkpointer,
 )
-from .lc_models import build_model
+from .lc_models import PROVIDER_DEFAULTS, build_model
 from .lc_tools import ALL_TOOLS, DANGEROUS_TOOL_NAMES
+from .plugins import get_all_tools_with_plugins
 
-_rc = Console()
+# Local / keyless providers don't require a real API key
+_KEYLESS_PROVIDERS = {"ollama"}
 
+# Active model name, used by _approx_tokens to pick a tokenizer.
+_active_model: str = "gpt-4o"
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _resolve_provider_model(
     provider: Optional[str],
     model: Optional[str],
-) -> tuple[str, str, str]:
-    """Return (provider_name, api_key, model_id), filling gaps from config."""
+) -> tuple[str, str, str, Optional[str]]:
+    """Return (provider_name, api_key, model_id, base_url), filling gaps from config.
+
+    For keyless providers (e.g. ollama) a placeholder key is supplied.
+    """
     cfg = get_config()
 
     if provider is None:
@@ -60,24 +64,42 @@ def _resolve_provider_model(
     pconfig = cfg.get_provider_config(provider)
 
     if model is None:
-        model = pconfig.default_model if pconfig else "gemini-2.5-flash"
-
-    api_key = get_api_key(provider)
-    if not api_key:
-        raise ValueError(
-            f"No API key found for provider '{provider}'. "
-            "Run /setup or set the appropriate environment variable."
+        model = pconfig.default_model if pconfig and pconfig.default_model else (
+            PROVIDER_DEFAULTS.get(provider, {}).get("model", "gemini-2.5-flash")
         )
 
-    return provider, api_key, model
+    if provider in _KEYLESS_PROVIDERS:
+        api_key = "ollama"  # placeholder; ollama ignores the key
+    else:
+        api_key = get_api_key(provider)
+        if not api_key:
+            raise ValueError(
+                f"No API key found for provider '{provider}'. "
+                "Run /setup or set the appropriate environment variable."
+            )
 
+    base_url = (
+        pconfig.base_url if pconfig and pconfig.base_url
+        else PROVIDER_DEFAULTS.get(provider, {}).get("base_url")
+    )
+
+    return provider, api_key, model, base_url
+
+_rc = Console()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _build_system_prompt() -> str:
-    """Inject live context (cwd, git) into the base system prompt."""
+    """Inject live context (cwd, git, .commandorignore) into the base system prompt."""
     from ..utils.shell import get_git_info, get_working_directory  # noqa: PLC0415
+    from ..utils.ignore import IgnoreMatcher  # noqa: PLC0415
 
     cwd = get_working_directory()
     git = get_git_info()
+    matcher = IgnoreMatcher(base_dir=cwd)
 
     context_block = (
         f"\n## Current context\n"
@@ -86,6 +108,15 @@ def _build_system_prompt() -> str:
         f"- NEVER create project files in the Commandor tool directory — always `cd_tool` into a dedicated project directory first\n"
         f"- Git: {git}\n"
     )
+    if matcher.pattern_count > 0:
+        context_block += (
+            f"\n## File protection\n"
+            f"A `.commandorignore` file is active ({matcher.summary()}).  "
+            f"Files matched by its patterns are off-limits — read_file_tool, "
+            f"write_file_tool, edit_file_tool, glob_tool, grep_tool and "
+            f"get_project_files_tool will refuse to touch them.  Respect the "
+            f"user's privacy: do not attempt workarounds.\n"
+        )
     return SYSTEM_PROMPT + context_block
 
 
@@ -160,9 +191,15 @@ def _get_context_window(llm) -> int | None:
 
 
 def _approx_tokens(messages: list) -> int:
-    """Rough token estimate: chars / 4 (no tokenizer dependency)."""
-    from langchain_core.messages import get_buffer_string  # noqa: PLC0415
-    return len(get_buffer_string(messages)) // 4
+    """Token estimate using tiktoken (falls back to chars/4).
+
+    Uses cl100k_base as the encoding for any non-OpenAI model — much
+    more accurate than `len // 4` for code-heavy agent traces.
+    """
+    from ..utils.tokenizer import count_message_tokens  # noqa: PLC0415
+    # Use the active model's tokenizer when possible
+    model = globals().get("_active_model", "gpt-4o")
+    return count_message_tokens(messages, model=model)
 
 
 def _make_summarize_hook(llm, metrics: dict | None = None):
@@ -533,17 +570,36 @@ def _stream_graph(
 # Mode runners
 # ---------------------------------------------------------------------------
 
+def _build_first_message(task: str, image_paths: Optional[list[str]] = None):
+    """Build the first HumanMessage, with multimodal content if images are given."""
+    from ..utils.multimodal import build_multimodal_message, is_image_file  # noqa: PLC0415
+
+    valid = [p for p in (image_paths or []) if is_image_file(p)]
+    if not valid:
+        return HumanMessage(content=task)
+    try:
+        content = build_multimodal_message(task, valid)
+        return HumanMessage(content=content)
+    except (FileNotFoundError, ValueError) as exc:
+        # Fall back to text-only on error so the run still proceeds
+        _rc.print(f"[yellow]⚠ Could not attach image: {exc}[/yellow]")
+        return HumanMessage(content=task)
+
+
 def _run_agent(
     llm, task: str, system_prompt: str, config: dict,
     verbose: bool, metrics: dict, session_name: Optional[str] = None,
+    image_paths: Optional[list[str]] = None,
 ) -> AgentResult:
     """Fully autonomous agent run (streaming)."""
     _print_run_header("agent", metrics.get("model", ""), session_name)
     t0 = time.monotonic()
 
     hook = _make_summarize_hook(llm, metrics)
-    graph = build_agent_graph(llm, ALL_TOOLS, system_prompt, pre_model_hook=hook)
-    _stream_graph(graph, {"messages": [HumanMessage(content=task)]}, config, metrics)
+    tools = get_all_tools_with_plugins()
+    graph = build_agent_graph(llm, tools, system_prompt, pre_model_hook=hook)
+    first_message = _build_first_message(task, image_paths)
+    _stream_graph(graph, {"messages": [first_message]}, config, metrics)
 
     state = graph.get_state(config)
     metrics["approx_tokens"] = _approx_tokens(state.values.get("messages", []))
@@ -559,13 +615,15 @@ def _run_agent(
 def _run_chat(
     llm, task: str, system_prompt: str, config: dict,
     verbose: bool, metrics: dict, session_name: Optional[str] = None,
+    image_paths: Optional[list[str]] = None,
 ) -> AgentResult:
     """Chat-only (no tools) run (streaming)."""
     _print_run_header("chat", metrics.get("model", ""), session_name)
     t0 = time.monotonic()
 
     graph = build_chat_graph(llm, system_prompt)
-    _stream_graph(graph, {"messages": [HumanMessage(content=task)]}, config, metrics)
+    first_message = _build_first_message(task, image_paths)
+    _stream_graph(graph, {"messages": [first_message]}, config, metrics)
 
     state = graph.get_state(config)
     metrics["approx_tokens"] = _approx_tokens(state.values.get("messages", []))
@@ -587,7 +645,8 @@ def _run_assist(
     t0 = time.monotonic()
 
     hook = _make_summarize_hook(llm, metrics)
-    graph = build_assist_graph(llm, ALL_TOOLS, system_prompt, pre_model_hook=hook)
+    tools = get_all_tools_with_plugins()
+    graph = build_assist_graph(llm, tools, system_prompt, pre_model_hook=hook)
 
     _stream_graph(graph, {"messages": [HumanMessage(content=task)]}, config, metrics)
 
@@ -777,7 +836,8 @@ def _run_plan(
     exec_tid = f"agent_{resolved_tid}" if resolved_tid else f"plan_exec_{uuid.uuid4()}"
     exec_config = {"configurable": {"thread_id": exec_tid}}
     hook = _make_summarize_hook(llm, metrics)
-    agent_graph = build_agent_graph(llm, ALL_TOOLS, execution_prompt, pre_model_hook=hook)
+    tools = get_all_tools_with_plugins()
+    agent_graph = build_agent_graph(llm, tools, execution_prompt, pre_model_hook=hook)
     _stream_graph(
         agent_graph,
         {"messages": [HumanMessage(content=task)]},
@@ -821,28 +881,39 @@ def run_agent(
     thread_id: Optional[str] = None,
     verbose: bool = True,
     session_name: Optional[str] = None,
+    image_paths: Optional[list[str]] = None,
 ) -> AgentResult:
     """Run an agent task in the specified mode.
 
     Args:
         task:         The user's request / instruction.
         mode:         One of 'agent', 'chat', 'assist', 'plan'.
-        provider:     AI provider ('gemini', 'anthropic', 'openai', 'openrouter').
+        provider:     AI provider ('gemini', 'anthropic', 'openai', 'openrouter',
+                      'ollama', 'groq', 'deepseek', 'openai_compat').
                       Defaults to the configured default provider.
         model:        Model identifier. Defaults to the provider's default model.
         thread_id:    Conversation thread ID for memory continuity.
         verbose:      Whether to print progress messages.
         session_name: Human-readable session name shown in the run header.
+        image_paths:  Optional list of image paths for multimodal input.
+                      The chosen model must support vision for this to be useful.
 
     Returns:
         AgentResult with success flag and final_answer text.
     """
     try:
-        resolved_provider, api_key, resolved_model = _resolve_provider_model(
+        resolved_provider, api_key, resolved_model, resolved_base_url = _resolve_provider_model(
             provider, model
         )
-        llm = build_model(resolved_provider, api_key, resolved_model)
+        llm = build_model(
+            resolved_provider, api_key, resolved_model, base_url=resolved_base_url
+        )
         system_prompt = _build_system_prompt()
+
+        # Expose the active model to the tokenizer helper (module-level state
+        # for the lifetime of this run).
+        global _active_model
+        _active_model = resolved_model
 
         resolved_tid = thread_id or str(uuid.uuid4())
         scoped_tid = f"{mode}_{resolved_tid}"
@@ -851,9 +922,9 @@ def run_agent(
         metrics: dict = {"model": resolved_model, "condensations": 0}
 
         if mode == "agent":
-            return _run_agent(llm, task, system_prompt, config, verbose, metrics, session_name)
+            return _run_agent(llm, task, system_prompt, config, verbose, metrics, session_name, image_paths)
         elif mode == "chat":
-            return _run_chat(llm, task, system_prompt, config, verbose, metrics, session_name)
+            return _run_chat(llm, task, system_prompt, config, verbose, metrics, session_name, image_paths)
         elif mode == "assist":
             return _run_assist(llm, task, system_prompt, config, verbose, metrics, session_name)
         elif mode == "plan":
@@ -878,7 +949,7 @@ def run_agent(
                     )
                     return run_agent(task, mode=mode, provider=provider, model=model,
                                      thread_id=thread_id, verbose=verbose,
-                                     session_name=session_name)
+                                     session_name=session_name, image_paths=image_paths)
             except Exception:
                 pass
         return AgentResult(
@@ -895,18 +966,28 @@ run_agent_interactive = run_agent
 def test_providers() -> dict:
     """Test which providers have valid API keys configured."""
     results = {}
-    providers = ["gemini", "anthropic", "openai", "openrouter"]
+    providers = [
+        "gemini", "anthropic", "openai", "openrouter",
+        "ollama", "groq", "deepseek", "openai_compat",
+    ]
 
     for name in providers:
-        key = get_api_key(name)
-        if not key:
-            results[name] = {"status": "no_api_key"}
-            continue
+        if name in _KEYLESS_PROVIDERS:
+            key = "ollama"
+        else:
+            key = get_api_key(name)
+            if not key:
+                results[name] = {"status": "no_api_key"}
+                continue
         try:
             cfg = get_config()
             pconfig = cfg.get_provider_config(name)
             m = pconfig.default_model if pconfig else ""
-            llm = build_model(name, key, m)
+            base_url = (
+                pconfig.base_url if pconfig and pconfig.base_url
+                else PROVIDER_DEFAULTS.get(name, {}).get("base_url")
+            )
+            llm = build_model(name, key, m, base_url=base_url)
             llm.invoke("ping")
             results[name] = {"status": "ok"}
         except Exception as e:

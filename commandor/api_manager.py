@@ -36,27 +36,44 @@ from .config import get_api_key, get_config
 # Provider metadata
 # ---------------------------------------------------------------------------
 
-PROVIDERS = ["gemini", "anthropic", "openai", "openrouter"]
+PROVIDERS = [
+    "gemini", "anthropic", "openai", "openrouter",
+    "ollama", "groq", "deepseek", "openai_compat",
+]
 
 _DISPLAY_NAMES = {
-    "gemini":     "Google Gemini",
-    "anthropic":  "Anthropic Claude",
-    "openai":     "OpenAI",
-    "openrouter": "OpenRouter",
+    "gemini":        "Google Gemini",
+    "anthropic":     "Anthropic Claude",
+    "openai":        "OpenAI",
+    "openrouter":    "OpenRouter",
+    "ollama":        "Ollama (local)",
+    "groq":          "Groq Cloud",
+    "deepseek":      "DeepSeek",
+    "openai_compat": "OpenAI-compatible (LM Studio, vLLM, …)",
 }
 
+# Providers that DO NOT need an API key to function.
+_KEYLESS_PROVIDERS = {"ollama"}
+
 _ENV_VARS = {
-    "gemini":     "GEMINI_API_KEY",
-    "anthropic":  "ANTHROPIC_API_KEY",
-    "openai":     "OPENAI_API_KEY",
-    "openrouter": "OPENROUTER_API_KEY",
+    "gemini":        "GEMINI_API_KEY",
+    "anthropic":     "ANTHROPIC_API_KEY",
+    "openai":        "OPENAI_API_KEY",
+    "openrouter":    "OPENROUTER_API_KEY",
+    "groq":          "GROQ_API_KEY",
+    "deepseek":      "DEEPSEEK_API_KEY",
+    "openai_compat": "OPENAI_COMPAT_API_KEY",
 }
 
 _DEFAULT_MODELS = {
-    "gemini":     "gemini-2.5-flash",
-    "anthropic":  "claude-3.5-sonnet-20241022",
-    "openai":     "gpt-4o",
-    "openrouter": "anthropic/claude-3.5-sonnet",
+    "gemini":        "gemini-2.5-flash",
+    "anthropic":     "claude-3-5-sonnet-20241022",
+    "openai":        "gpt-4o",
+    "openrouter":    "anthropic/claude-3.5-sonnet",
+    "ollama":        "llama3.1",
+    "groq":          "llama-3.3-70b-versatile",
+    "deepseek":      "deepseek-chat",
+    "openai_compat": "local-model",
 }
 
 
@@ -114,13 +131,17 @@ class APIManager:
         table.add_column("Status",        no_wrap=True)
         table.add_column("Key",           no_wrap=True)
         table.add_column("Default Model", style="dim", overflow="fold")
+        table.add_column("Base URL",      style="dim", overflow="fold")
         table.add_column("",              no_wrap=True)  # default marker
 
         for name in PROVIDERS:
             pconfig = cfg.get_provider_config(name)
             key = get_api_key(name)
 
-            if key:
+            if name in _KEYLESS_PROVIDERS:
+                status = "[green]✓ local[/green]"
+                masked = "[dim]—[/dim]"
+            elif key:
                 status = "[green]✓ set[/green]"
                 masked = f"[dim]{_mask_key(key)}[/dim]"
             else:
@@ -129,6 +150,7 @@ class APIManager:
 
             model = (pconfig.default_model if pconfig and pconfig.default_model
                      else _DEFAULT_MODELS.get(name, "—"))
+            base_url = (pconfig.base_url if pconfig and pconfig.base_url else "—")
             is_default = "[yellow]★ default[/yellow]" if name == default_provider else ""
 
             table.add_row(
@@ -137,6 +159,7 @@ class APIManager:
                 status,
                 masked,
                 model,
+                base_url,
                 is_default,
             )
 
@@ -150,6 +173,7 @@ class APIManager:
         cmds = [
             "/api set <provider> <key>",
             "/api model <provider> <model>",
+            "/api url <provider> <base_url>",
             "/api test [provider]",
             "/api remove <provider>",
             "/api default <provider>",
@@ -202,7 +226,20 @@ class APIManager:
         cfg = get_config()
         cfg.set_provider_model(provider, model.strip())
         self._console.print(
-            f"[green]✓ Default model for [bold]{provider}[/bold] set to: [cyan]{model.strip()}[/cyan][/green]"
+            f"[green]✓ Default model for [bold]{provider}[/bold] set to: "
+            f"[cyan]{model.strip()}[/cyan][/green]"
+        )
+
+    def set_base_url(self, provider: str, base_url: str) -> None:
+        """Set the API base URL for a provider (used by ollama, deepseek,
+        openai_compat, and any custom endpoint)."""
+        if not _validate_provider(provider, self._console):
+            return
+        cfg = get_config()
+        cfg.set_provider_base_url(provider, base_url.strip())
+        self._console.print(
+            f"[green]✓ Base URL for [bold]{provider}[/bold] set to: "
+            f"[cyan]{base_url.strip() or '(cleared)'}[/cyan][/green]"
         )
 
     def set_default(self, provider: str) -> None:

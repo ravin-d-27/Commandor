@@ -7,6 +7,7 @@ Entry point for commandor command
 import sys
 import argparse
 from . import config
+from . import __version__
 from .agent import run_agent
 
 
@@ -44,11 +45,21 @@ def main():
     )
     parser.add_argument(
         "-p", "--provider",
-        help="AI provider to use (gemini, anthropic, openai, openrouter)"
+        help=(
+            "AI provider to use (gemini, anthropic, openai, openrouter, "
+            "ollama, groq, deepseek, openai_compat)"
+        )
     )
     parser.add_argument(
         "-m", "--model",
         help="Model to use"
+    )
+    parser.add_argument(
+        "--image",
+        action="append",
+        default=[],
+        help="Attach an image to the first message (vision models only). "
+             "May be passed multiple times.",
     )
     parser.add_argument(
         "--setup",
@@ -64,7 +75,7 @@ def main():
     args = parser.parse_args()
 
     if args.version:
-        print("Commandor v0.2.0")
+        print(f"Commandor v{__version__}")
         print("Agentic CLI - Autonomous coding assistant")
         return 0
 
@@ -90,7 +101,8 @@ def main():
                 task,
                 mode=mode,
                 provider=args.provider,
-                model=args.model
+                model=args.model,
+                image_paths=args.image or None,
             )
 
             if result.success:

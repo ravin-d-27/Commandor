@@ -157,42 +157,63 @@ Recent commits:
 
 def get_project_files(extensions: Optional[List[str]] = None) -> str:
     """Get list of project files
-    
+
     Args:
         extensions: File extensions to include (e.g., ['.py', '.js'])
-    
+
     Returns:
-        List of project files
+        List of project files (filtered by .commandorignore when present)
     """
     from .file_ops import list_directory
-    
+
     if extensions is None:
         extensions = ['.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.go', '.rs', '.cpp', '.c', '.h']
-    
+
     files = []
     cwd = Path.cwd()
-    
+
     # Common directories to ignore
     ignore_dirs = {'.git', '__pycache__', 'node_modules', '.venv', 'venv', 'dist', 'build', '.next', 'target'}
-    
+
     for ext in extensions:
         for f in cwd.rglob(f'*{ext}'):
             # Check if any parent should be ignored
             if not any(part in ignore_dirs for part in f.parts):
                 rel = f.relative_to(cwd)
                 files.append(str(rel))
-    
-    if not files:
+
+    # Apply .commandorignore if present
+    try:
+        from .ignore import IgnoreMatcher
+        matcher = IgnoreMatcher(base_dir=str(cwd))
+        if matcher.pattern_count > 0:
+            original = len(files)
+            files = [f for f in files if not matcher.matches(f)]
+            if len(files) != original:
+                files.insert(0, f"({original - len(files)} file(s) excluded by .commandorignore)")
+    except Exception:
+        pass
+
+    if not files or files == [f"(0 file(s) excluded by .commandorignore)"]:
         return "No project files found"
-    
-    files.sort()
-    
-    result = [f"Found {len(files)} file(s):"]
-    result.extend(files[:50])
-    
-    if len(files) > 50:
-        result.append(f"... and {len(files) - 50} more")
-    
+
+    # If first line is a string marker (from filtering), separate it
+    is_marker = isinstance(files[0], str) and files[0].startswith("(")
+    marker = files[0] if is_marker else None
+    actual_files = files[1:] if is_marker else files
+
+    if not actual_files:
+        return marker or "No project files found"
+
+    actual_files.sort()
+    result: list[str] = []
+    if marker:
+        result.append(marker)
+    result.append(f"Found {len(actual_files)} file(s):")
+    result.extend(actual_files[:50])
+    if len(actual_files) > 50:
+        result.append(f"... and {len(actual_files) - 50} more")
+
     return "\n".join(result)
 
 

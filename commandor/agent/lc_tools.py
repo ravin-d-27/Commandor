@@ -11,8 +11,26 @@ from typing import List, Optional
 
 from langchain_core.tools import tool
 
-from ..utils import file_ops, shell
+from ..utils import file_ops, shell, web_ops
 from ..utils.diff_display import display_diff
+from ..utils.diff_side_by_side import display_side_by_side_diff
+from ..utils.git_ops import git_commit, git_log, get_git_status, is_git_repo
+from ..utils.ignore import IgnoreMatcher
+from .subagent import delegate_task, parallel_delegate
+
+# Side-by-side diff is opt-in via env var; default is the unified view used
+# by the executor (which prints to a non-TTY console that can't do columns).
+def _show_diff(path: str, old: str, new: str) -> None:
+    """Display a file mutation diff.
+
+    Uses the side-by-side renderer in a TTY; falls back to unified when the
+    console is too narrow or Pygments is unavailable.
+    """
+    import os as _os
+    if _os.environ.get("COMMANDOR_SIDE_BY_SIDE_DIFF", "0") == "1":
+        display_side_by_side_diff(path, old, new)
+    else:
+        display_diff(path, old, new)
 
 
 # ---------------------------------------------------------------------------
@@ -22,6 +40,35 @@ from ..utils.diff_display import display_diff
 # ---------------------------------------------------------------------------
 
 _plan_tls = threading.local()
+
+# Module-level ignore matcher.  Initialized lazily on first use; the agent's
+# system prompt is updated to reflect the active source.
+_ignore_matcher: Optional[IgnoreMatcher] = None
+
+
+def _get_ignore_matcher() -> IgnoreMatcher:
+    """Return the process-wide IgnoreMatcher (created on first use)."""
+    global _ignore_matcher
+    if _ignore_matcher is None:
+        _ignore_matcher = IgnoreMatcher()
+    return _ignore_matcher
+
+
+def _deny_if_ignored(path: str, op: str) -> Optional[str]:
+    """If *path* is matched by .commandorignore, return an error message.
+
+    Returns None when the path is allowed.
+    """
+    matcher = _get_ignore_matcher()
+    if matcher.pattern_count == 0:
+        return None
+    if matcher.is_ignored(path):
+        return (
+            f"Refused to {op} '{path}': path is matched by .commandorignore "
+            f"(rules: {matcher.summary()}).  Ask the user to remove the rule "
+            f"or pass an unignored path before retrying."
+        )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +89,10 @@ def read_file_tool(path: str, onset: int = 0, offset: Optional[int] = None) -> s
         offset: Last line to read, 0-indexed **inclusive** (default = end of file).
     """
     try:
+        denied = _deny_if_ignored(path, "read")
+        if denied:
+            return denied
+
         p = Path(path)
         if not p.exists():
             return f"Error: File not found: {path}"
@@ -88,6 +139,10 @@ def write_file_tool(path: str, content: str) -> str:
         content: Full content to write to the file. Must be the complete file
                  content (not a diff or partial update).
     """
+    denied = _deny_if_ignored(path, "write")
+    if denied:
+        return denied
+
     # Capture old content before overwriting
     try:
         old_content = Path(path).read_text(encoding="utf-8")
@@ -98,7 +153,7 @@ def write_file_tool(path: str, content: str) -> str:
         result = file_ops.write_file(path, content, create_dirs=True)
     except OSError as e:
         return f"Error writing file: {e}"
-    display_diff(path, old_content, content)
+    _show_diff(path, old_content, content)
     return result
 
 
@@ -120,6 +175,10 @@ def edit_file_tool(path: str, old: str, new: str) -> str:
         old: The exact text to find and replace (must exist verbatim in the file).
         new: The replacement text.
     """
+    denied = _deny_if_ignored(path, "edit")
+    if denied:
+        return denied
+
     # Capture old content before editing
     try:
         old_content = Path(path).read_text(encoding="utf-8")
@@ -137,7 +196,7 @@ def edit_file_tool(path: str, old: str, new: str) -> str:
     except (FileNotFoundError, OSError):
         new_content = old_content.replace(old, new, 1)
 
-    display_diff(path, old_content, new_content)
+    _show_diff(path, old_content, new_content)
     return result
 
 
@@ -202,7 +261,7 @@ def patch_file_tool(path: str, diff: str) -> str:
     except (FileNotFoundError, OSError):
         new_content = old_content
 
-    display_diff(path, old_content, new_content)
+    _show_diff(path, old_content, new_content)
     return f"Patch applied successfully to {path}."
 
 
@@ -220,12 +279,15 @@ def glob_tool(pattern: str, path: str = ".") -> str:
     - '*.ts'      — TypeScript files in the current directory only
     - 'src/**/*'  — everything under src/
 
+    Files matched by .commandorignore are filtered out automatically.
+
     Args:
         pattern: Glob pattern such as '**/*.py' or '*.ts'.
         path: Directory to search in (defaults to current working directory).
     """
     try:
-        return file_ops.glob_files(pattern, path)
+        result = file_ops.glob_files(pattern, path)
+        return _filter_ignored_from_text_list(result, path, pattern)
     except (FileNotFoundError, ValueError, OSError) as e:
         return f"Error: {e}"
 
@@ -235,7 +297,8 @@ def grep_tool(pattern: str, path: str = ".", file_pattern: str = "*") -> str:
     """Search for a regex pattern inside file contents.
 
     Use this to find where a function, class, variable, or string is defined
-    or referenced across a project.
+    or referenced across a project.  Files matched by .commandorignore
+    are skipped automatically.
 
     Args:
         pattern: Regular expression to search for (e.g. 'def my_func', 'TODO', 'import os').
@@ -243,9 +306,55 @@ def grep_tool(pattern: str, path: str = ".", file_pattern: str = "*") -> str:
         file_pattern: Glob pattern to filter files (e.g. '*.py', '*.ts', '*.json').
     """
     try:
-        return file_ops.search_in_files(pattern, path, file_pattern)
+        result = file_ops.search_in_files(pattern, path, file_pattern)
+        return _filter_ignored_from_text_list(result, path, "*")
     except (FileNotFoundError, ValueError, OSError) as e:
         return f"Error: {e}"
+
+
+def _filter_ignored_from_text_list(text: str, base: str, _pattern: str) -> str:
+    """Drop lines from a glob/grep result that reference ignored files.
+
+    The existing helpers return a list of paths or path:line entries.  We
+    keep the heading line ("Found N file(s):") and filter the body.
+    """
+    matcher = _get_ignore_matcher()
+    if matcher.pattern_count == 0:
+        return text
+
+    lines = text.splitlines()
+    if not lines:
+        return text
+
+    # The first line is a header like "Found 12 file(s):" or "Found 5 match(es):"
+    header = lines[0]
+    body = lines[1:]
+
+    base_path = Path(base).resolve() if base and base != "." else Path.cwd()
+
+    kept: list[str] = []
+    for line in body:
+        # Extract the first whitespace-delimited token (the path)
+        candidate = line.lstrip(" ").lstrip("\t").split(":", 1)[0].split()[0:1]
+        if not candidate:
+            kept.append(line)
+            continue
+        first = candidate[0]
+        try:
+            abs_p = (base_path / first).resolve() if not Path(first).is_absolute() else Path(first)
+        except OSError:
+            abs_p = Path(first)
+        if not matcher.is_ignored(str(abs_p)):
+            kept.append(line)
+
+    # Update the header count to reflect filtering
+    if "match(es):" in header or "file(s):" in header:
+        new_count = len(kept)
+        header = header.split(":")[0] + f":  ({new_count} shown, some ignored)"
+
+    if not kept:
+        return header + "\n  (all results matched by .commandorignore)"
+    return "\n".join([header, *kept])
 
 
 @tool
@@ -277,10 +386,21 @@ def run_command_tool(command: str, timeout: int = 60) -> str:
     - Avoid commands needing interactive input (e.g. passwd, vim, less)
     - For long-running processes (servers, watchers), use a short timeout and note the PID
 
+    Safety: A handful of obviously destructive command patterns (rm -rf /, sudo rm,
+    curl | sh, mkfs, dd of=/dev/sd*, etc.) are intercepted before execution and
+    require explicit confirmation.  The agent will be told to ask the user to run
+    the command manually instead.
+
     Args:
         command: Shell command to execute (runs in the current working directory).
         timeout: Maximum seconds to wait before giving up (default 60).
     """
+    if shell.is_dangerous(command):
+        return (
+            "⚠ BLOCKED: this command matches a destructive pattern "
+            "(rm -rf, sudo rm, dd, mkfs, curl|sh, fork bomb, etc.).  "
+            "Ask the user to confirm and run it manually instead of via this tool."
+        )
     return shell.run_command(command, timeout=timeout)
 
 
@@ -316,6 +436,8 @@ def cd_tool(path: str) -> str:
 def get_project_files_tool(extensions: Optional[List[str]] = None) -> str:
     """List all source files in the project, filtered by extension.
 
+    Files matched by .commandorignore are excluded automatically.
+
     Args:
         extensions: Optional list of file extensions to include,
                     e.g. ['.py', '.ts']. Defaults to common source file types.
@@ -336,11 +458,205 @@ def get_environment_tool() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Network tools
+# ---------------------------------------------------------------------------
+
+@tool
+def fetch_url_tool(url: str, timeout: int = 30, max_chars: int = 50000) -> str:
+    """Fetch a web page and return its text content (HTML tags stripped).
+
+    Use this to read documentation, blog posts, Stack Overflow answers,
+    GitHub READMEs, API references, or any other public web page.  Returns
+    plain text only — no images, scripts, or styling.
+
+    Only http:// and https:// URLs are allowed.  Local file://, gopher://,
+    and similar schemes are rejected for safety.
+
+    For POST / PUT / DELETE / generic HTTP, use http_request_tool.
+
+    Args:
+        url:       Full http(s) URL to fetch.
+        timeout:   Seconds to wait before giving up (default 30).
+        max_chars: Maximum number of characters to return (default 50000).
+    """
+    return web_ops.fetch_url(url, timeout=timeout, max_chars=max_chars)
+
+
+@tool
+def http_request_tool(
+    method: str,
+    url: str,
+    headers: Optional[dict] = None,
+    body: str = "",
+    timeout: int = 30,
+    max_chars: int = 50000,
+) -> str:
+    """Send a generic HTTP request (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS).
+
+    Use this to interact with REST APIs, webhooks, or any HTTP service.
+    JSON request bodies are detected and sent with Content-Type:
+    application/json automatically.  Only http:// and https:// URLs
+    are allowed.
+
+    The response is returned as a formatted block: status line, content
+    type, and the body (HTML stripped, JSON pretty-printed).
+
+    Args:
+        method:    HTTP verb — GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS.
+        url:       Target URL.
+        headers:   Optional dict of extra request headers (e.g. Authorization).
+        body:      Optional request body as a string.  If it parses as JSON,
+                   it is sent as application/json.
+        timeout:   Seconds before giving up (default 30).
+        max_chars: Maximum response characters (default 50000).
+    """
+    return web_ops.http_request(
+        method=method,
+        url=url,
+        headers=headers,
+        body=body,
+        timeout=timeout,
+        max_chars=max_chars,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Git tools
+# ---------------------------------------------------------------------------
+
+@tool
+def git_status_tool() -> str:
+    """Return a short git status report (current branch, staged/unstaged files).
+
+    Returns 'Not a git repository' if the working directory is not inside one.
+    """
+    if not is_git_repo():
+        return "Not a git repository."
+    return get_git_status()
+
+
+@tool
+def git_diff_tool(path: str = "", staged: bool = False) -> str:
+    """Show the git diff (working tree by default; pass staged=True for staged).
+
+    Args:
+        path:   Optional file path filter (e.g. 'src/foo.py').  Empty = whole tree.
+        staged: If True, show staged-but-not-committed changes.
+    """
+    if not is_git_repo():
+        return "Not a git repository."
+    return get_git_diff(path=path or None, staged=staged)
+
+
+@tool
+def git_commit_tool(message: str, add_all: bool = False, amend: bool = False) -> str:
+    """Create a git commit with the given message.
+
+    Refuses to commit with an empty message.  Set add_all=True to first
+    stage every modified/deleted/untracked file.  Set amend=True to
+    amend the previous commit (rewrites history — use with care).
+
+    Args:
+        message: Commit message.  Should be a one-line summary; multi-line
+                 messages are allowed but the first line is the subject.
+        add_all: If True, run 'git add -A' before committing.
+        amend:   If True, amend the previous commit instead of creating a new one.
+    """
+    if not message or not message.strip():
+        return "Refused to commit with an empty message."
+    return git_commit(message=message, add_all=add_all, amend=amend)
+
+
+@tool
+def git_log_tool(n: int = 10) -> str:
+    """Show the last *n* commits (default 10).
+
+    Args:
+        n: Number of commits to show.
+    """
+    return git_log(n=n)
+
+
+# ---------------------------------------------------------------------------
+# Sub-agent delegation tools
+# ---------------------------------------------------------------------------
+
+@tool
+def delegate_task_tool(subtask: str, use_tools: bool = False) -> str:
+    """Delegate a focused subtask to a short-lived sub-agent.
+
+    A sub-agent runs in its own graph with its own thread_id, gets only
+    the base system prompt (no parent history), and returns a single
+    string answer.  Use this to:
+
+      - Get a second opinion on a design decision
+      - Perform a parallel code review while you keep working
+      - Run a focused lookup / analysis without polluting the main context
+      - Hand off an entire sub-task ("write unit tests for module X")
+
+    The sub-agent uses the same provider/model as the parent unless
+    overridden.  Its checkpoint thread is deleted on completion so the
+    sub-agent's memory does not accumulate.
+
+    Args:
+        subtask:   Self-contained instruction.  Don't reference prior
+                   conversation context — the sub-agent can't see it.
+        use_tools: If True, the sub-agent gets the same tools as the
+                   parent.  Default False (chat-only) is faster and
+                   cheaper for lookups, summaries, and analysis.
+    """
+    return delegate_task(subtask=subtask, use_tools=use_tools)
+
+
+@tool
+def parallel_delegate_tool(tasks: List[str]) -> str:
+    """Run multiple sub-tasks concurrently and return their answers.
+
+    Each task is a self-contained instruction.  Up to 4 sub-agents run
+    in parallel; the rest are queued.  Use this for fan-out work like
+    "review these 3 PRs" or "look up docs for A, B, C in parallel".
+
+    Args:
+        tasks: A list of task strings.  Strings are treated as
+               chat-only sub-tasks.
+
+    Returns:
+        A formatted block with one section per sub-task, in the same
+        order as the input.
+    """
+    if not tasks:
+        return "Error: empty task list."
+
+    # Normalise input — accept either strings or dicts
+    normalised: list[dict] = []
+    for t in tasks:
+        if isinstance(t, str):
+            normalised.append({"subtask": t, "use_tools": False})
+        elif isinstance(t, dict):
+            normalised.append({
+                "subtask": t.get("subtask", ""),
+                "use_tools": bool(t.get("use_tools", False)),
+            })
+        else:
+            return f"Error: each task must be a string or dict, got {type(t).__name__}"
+
+    results = parallel_delegate(normalised)
+
+    out: list[str] = []
+    for i, r in enumerate(results, 1):
+        marker = "[green]✓[/green]" if r["ok"] else "[red]✗[/red]"
+        out.append(f"{marker} Task {i}: {r['subtask'][:80]}")
+        out.append(r["answer"])
+        out.append("")  # blank line between tasks
+    return "\n".join(out).rstrip()
+
+
+# ---------------------------------------------------------------------------
 # Task-tracking tools (signal the TUI to render / update the plan panel)
 # ---------------------------------------------------------------------------
 
 @tool
-def create_task_plan(tasks: list) -> str:
+def create_task_plan(tasks: List[str]) -> str:
     """Show the user a live numbered task plan in the terminal UI.
 
     WHEN TO USE: Call this at the very start of any complex multi-step task
@@ -415,6 +731,14 @@ ALL_TOOLS = [
     get_project_files_tool,
     get_git_info_tool,
     get_environment_tool,
+    fetch_url_tool,
+    http_request_tool,
+    git_status_tool,
+    git_diff_tool,
+    git_commit_tool,
+    git_log_tool,
+    delegate_task_tool,
+    parallel_delegate_tool,
     create_task_plan,
     complete_task,
 ]

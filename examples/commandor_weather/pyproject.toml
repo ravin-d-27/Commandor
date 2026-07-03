@@ -1,0 +1,11 @@
+{
+    "name": "commandor-weather",
+    "version": "0.1.0",
+    "description": "Example plugin for Commandor: a fake weather tool to demonstrate the plugin system.",
+    "dependencies": ["commandor-ai"],
+    "entry_points": {
+        "commandor.tools": [
+            "register = commandor_weather.tools:register"
+        ]
+    }
+}

@@ -9,7 +9,7 @@ Because the checkpointer is now a SqliteSaver (see agent/lc_graph.py),
 conversation history is preserved across restarts and can be resumed by
 name via /sessions resume <name>.
 
-Commands exposed via terminal.py:
+Commands exposed via the Textual TUI:
   /sessions                        – list saved sessions (Rich table)
   /sessions save <name>            – name the current session
   /sessions new  <name>            – start a fresh named session

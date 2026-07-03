@@ -1,18 +1,21 @@
 """terminal_widget.py — Unified single-pane terminal widget for Commandor.
 
 Handles:
-  - Direct shell command execution (subprocess in worker thread)
+  - Natural-language agent tasks by default
+  - Direct shell command execution via `$ <cmd>` / `!<cmd>`
   - AI commands via /slash syntax: /agent, /chat, /ask, /plan, /assist
   - /setup interactive wizard (multi-step state machine)
-  - /provider, /model, /providers, /sessions sub-commands
+  - /provider, /model, /providers, /sessions, /api sub-commands
   - Command history (Up/Down)
   - CWD tracking (cd handled specially)
+  - Ctrl+C abort of the running AI worker
 """
 
 from __future__ import annotations
 
 import os
 import subprocess
+import threading
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -47,13 +50,25 @@ from ..session_manager import SessionManager
 # Constants
 # ---------------------------------------------------------------------------
 
-_PROVIDERS = ("gemini", "anthropic", "openai", "openrouter")
+_PROVIDERS = (
+    "gemini", "anthropic", "openai", "openrouter",
+    "ollama", "groq", "deepseek", "openai_compat",
+)
 
-_AI_CMDS = {"/agent", "/chat"}
+# Providers that require an API key (skip during /setup key entry if missing).
+# 'ollama' runs locally and does not need a key.
+_PROVIDERS_REQUIRING_KEY = {
+    "gemini", "anthropic", "openai", "openrouter",
+    "groq", "deepseek", "openai_compat",
+}
+
+_AI_CMDS = {"/agent", "/chat", "/assist", "/plan"}
 
 _MODE_MAP = {
     "/agent": "agent",
     "/chat": "chat",
+    "/assist": "assist",
+    "/plan": "plan",
 }
 
 # Context window limits per model (tokens)
@@ -75,16 +90,44 @@ _MODEL_CTX_LIMITS: dict[str, int] = {
     "anthropic/claude-3.5-sonnet": 200_000,
     "openai/gpt-4o": 128_000,
     "google/gemini-2.5-pro": 2_097_152,
+    # Ollama defaults (overridable per-model)
+    "llama3.1": 128_000,
+    "llama3.2": 128_000,
+    "qwen2.5-coder": 32_000,
+    "deepseek-coder-v2": 128_000,
+    "codellama": 16_000,
+    # Groq
+    "llama-3.3-70b-versatile": 128_000,
+    "llama-3.1-70b-versatile": 131_072,
+    "mixtral-8x7b-32768": 32_768,
+    # DeepSeek
+    "deepseek-chat": 64_000,
+    "deepseek-reasoner": 64_000,
 }
 
 _ALL_SLASH_CMDS = sorted([
-    "/agent", "/chat", "/clear",
-    "/export", "/help", "/model", "/pipe", "/provider",
-    "/providers", "/reset", "/retry", "/sessions", "/setup",
+    "/agent", "/assist", "/chat", "/clear", "/diff",
+    "/export", "/help", "/image", "/model", "/pipe", "/plan",
+    "/plugins", "/provider", "/providers", "/reset", "/retry",
+    "/sessions", "/setup",
 ])
 
 _HISTORY_FILE = Path.home() / ".commandor" / "history"
 _HISTORY_MAX = 1000
+_FILE_REF_SKIP_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+    ".venv",
+}
 
 HELP_TEXT = """\
 # Commandor — AI Terminal Help
@@ -92,7 +135,10 @@ HELP_TEXT = """\
 ## AI Commands
 | Command | Description |
 |---------|-------------|
+| plain text | Run the AI agent naturally (same as `/agent <task>`) |
 | `/agent <task>` | Run the AI agent (plans, uses tools, executes autonomously) |
+| `/assist <task>` | Agent mode with confirmations before each tool call |
+| `/plan <task>` | Plan first, then execute the approved plan |
 | `/chat <message>` | Conversational Q&A — no tools, just reasoning |
 
 ## Provider / Model
@@ -117,14 +163,21 @@ HELP_TEXT = """\
 |---------|-------------|
 | `/setup` | Interactive API key configuration wizard |
 | `/setup <provider>` | Start setup for a specific provider |
+| `/plugins` | List loaded plugin tools |
+| `/plugins reload` | Re-discover installed plugin entry points |
 
 ## Other
 | Command | Description |
 |---------|-------------|
 | `/help` | Show this help |
 | `/clear` | Clear the terminal |
+| `/diff` | Show git diff of the working tree |
+| `/image <path> [path ...]` | Attach an image (vision) to the next AI run |
+| `/image clear` | Detach all images |
+| `/image list` | List attached images |
 | `/pipe <cmd> [pipe] <prompt>` | Pipe shell output to AI |
 | `Ctrl+L` | Clear the terminal |
+| `Ctrl+C` | Abort the running AI worker |
 | `Ctrl+Q` | Quit |
 | `Up / Down` | Navigate command history |
 | `Tab` | Auto-complete slash commands |
@@ -134,11 +187,12 @@ HELP_TEXT = """\
 |---------|-------------|
 | `/retry` | Re-run the last AI command |
 | `/reset` | Clear conversation memory (new thread) |
-| `/export [file]` | Save session as markdown file |
+| `/export [md|json|html] [file]` | Save session — markdown (default), JSON, or HTML |
 
 ## Shell
-Any command that doesn't start with `/` is run as a shell command.
-`cd` is handled natively and updates the prompt path.
+Plain text runs the AI agent by default.
+Prefix shell commands with `$ ` or `!`, for example `$ ls` or `!git status`.
+`$ cd <path>` is handled natively and updates the prompt path.
 
 ## Notes
 The agent decides internally whether to plan, ask clarifying questions,
@@ -147,6 +201,10 @@ or execute directly based on the complexity of the task.
 ## Copy / Paste
 Use **Shift+drag** to select text (bypasses mouse reporting).
 Standard terminal copy (Ctrl+Shift+C / right-click) then works normally.
+
+## File References
+Type `@` anywhere in a task to browse project files. Keep typing to narrow the
+list, then press Tab to complete the active file reference.
 """
 
 
@@ -160,6 +218,7 @@ class TerminalWidget(Widget):
     BINDINGS = [
         Binding("up", "history_prev", "Previous command", priority=True, show=False),
         Binding("down", "history_next", "Next command", priority=True, show=False),
+        Binding("ctrl+c", "abort_ai", "Abort AI", priority=True, show=False),
     ]
 
     def __init__(
@@ -194,6 +253,7 @@ class TerminalWidget(Widget):
         self._stream_tokens: list[str] = []
         self._think_tokens: list[str] = []
         self._ai_worker = None
+        self._ai_cancel_event: threading.Event = threading.Event()
 
         # Context / retry / export state
         self._last_ai_task: Optional[str] = None
@@ -206,6 +266,9 @@ class TerminalWidget(Widget):
         self._plan_items: list = []
         self._plan_done: set = set()
 
+        # Multimodal attachments (image paths to send with the next AI run)
+        self._attached_images: list[str] = []
+
     # ------------------------------------------------------------------
     # Compose
     # ------------------------------------------------------------------
@@ -217,7 +280,7 @@ class TerminalWidget(Widget):
         yield Static("", id="stream-preview")
         with Horizontal(id="input-bar"):
             yield Static(self._prompt_text(), id="prompt-label")
-            yield Input(placeholder="", id="cmd-input")
+            yield Input(placeholder="Describe a task, or use $ <cmd> for shell", id="cmd-input")
 
     def on_mount(self) -> None:
         self.query_one("#stream-preview").display = False
@@ -325,7 +388,7 @@ class TerminalWidget(Widget):
         log.write(Text("◆  Commandor", style="bold #ffd700"))
         log.write(Text(f"   Provider: {provider}  ·  Model: {model}", style="#7a6b4a"))
         log.write(Text(
-            "   Type a shell command or /agent <task> to start. /help for more.",
+            "   Type a task naturally. Use $ <cmd> for shell, /help for more.",
             style="#7a6b4a",
         ))
         log.write(Text(""))
@@ -342,7 +405,7 @@ class TerminalWidget(Widget):
             self.action_tab_complete()
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        """Show live slash-command hints in the stream-preview as the user types."""
+        """Show live slash-command and @file hints as the user types."""
         # Never overwrite an active AI stream
         if self._ai_worker is not None and self._ai_worker.is_running:
             return
@@ -353,6 +416,17 @@ class TerminalWidget(Widget):
             if matches:
                 preview.display = True
                 preview.update(Text("  " + "   ".join(matches), style="#7a6b4a"))
+                return
+        inp = self.query_one("#cmd-input", Input)
+        ref = _active_file_reference(val, inp.cursor_position)
+        if ref is not None:
+            _start, _end, prefix = ref
+            matches = _file_reference_matches(prefix, cwd=self._cwd)
+            if matches:
+                shown = "   ".join(f"@{m}" for m in matches[:12])
+                suffix = "   …" if len(matches) > 12 else ""
+                preview.display = True
+                preview.update(Text(f"  {shown}{suffix}", style="#7a6b4a"))
                 return
         preview.display = False
 
@@ -437,11 +511,38 @@ class TerminalWidget(Widget):
         elif cmd == "/pipe":
             self._cmd_pipe(arg, log)
 
+        elif cmd == "/diff":
+            self._cmd_diff(arg, log)
+
+        elif cmd == "/image":
+            self._cmd_image(arg, log)
+
+        elif cmd == "/plugins":
+            self._cmd_plugins(arg, log)
+
+        elif cmd == "/api":
+            self._cmd_api(arg, log)
+
         elif cmd.startswith("/"):
             log.write(Text(f"  Unknown command: {cmd}  (try /help)", style="#cc2200"))
 
         else:
-            self._run_shell(text)
+            shell_cmd = _shell_escape_command(text)
+            if shell_cmd is not None:
+                if not shell_cmd:
+                    log.write(Text("  Usage: $ <shell-command> or !<shell-command>", style="#cc2200"))
+                    return
+                self._run_shell(shell_cmd)
+                return
+
+            expanded, files = _expand_files(text, cwd=self._cwd)
+            if files:
+                log.write(Text.from_markup(
+                    f"  [#c8a800]◈[/#c8a800]  Loaded {len(files)} file(s): "
+                    + ", ".join(f"[bold]{f}[/bold]" for f in files[:5])
+                    + ("…" if len(files) > 5 else "")
+                ))
+            self._run_ai(expanded, mode="agent")
 
     # ------------------------------------------------------------------
     # Shell execution
@@ -552,12 +653,19 @@ class TerminalWidget(Widget):
             log.write(Text("  ◈  AI is already running. Please wait.", style="#cc2200"))
             return
 
+        # Snapshot attached images BEFORE the run so the list can be mutated
+        # safely during streaming.
+        images_snapshot = list(self._attached_images)
+
         # Track for /retry
         self._last_ai_task = task
         self._last_ai_mode = mode
 
-        # Log to conversation history for /export
-        self._conversation_log.append({"role": "user", "content": task, "mode": mode})
+        # Log to conversation history for /export (mention attached images)
+        log_entry: dict = {"role": "user", "content": task, "mode": mode}
+        if images_snapshot:
+            log_entry["attachments"] = list(images_snapshot)
+        self._conversation_log.append(log_entry)
 
         # Auto-name session from first task (slug from first 5 words)
         if self._session_name is None:
@@ -568,20 +676,31 @@ class TerminalWidget(Widget):
         self._stream_tokens = []
         self._think_tokens = []
 
+        # Clear attachments — single-use (one AI run consumes them)
+        self._attached_images = []
+
         # Immediate visual feedback — user sees activity before first event arrives
         preview = self.query_one("#stream-preview", Static)
         preview.display = True
-        preview.update(Text("  ◈  Thinking…", style="#7a6b4a"))
+        if images_snapshot:
+            preview.update(Text(
+                f"  ◈  Thinking… ({len(images_snapshot)} image attached)",
+                style="#7a6b4a",
+            ))
+        else:
+            preview.update(Text("  ◈  Thinking…", style="#7a6b4a"))
 
         self._ai_worker = self.run_worker(
-            lambda: self._work_stream(task, mode),
+            lambda: self._work_stream(task, mode, images_snapshot),
             thread=True,
             exclusive=False,
             name="ai",
         )
 
-    def _work_stream(self, task: str, mode: str) -> None:
+    def _work_stream(self, task: str, mode: str, image_paths: Optional[list[str]] = None) -> None:
         """Worker: iterate stream_agent_events and dispatch to UI thread."""
+        # Reset cancellation flag for this run
+        self._ai_cancel_event.clear()
         for event in stream_agent_events(
             task,
             mode=mode,
@@ -589,7 +708,10 @@ class TerminalWidget(Widget):
             model=self._model,
             thread_id=self._session_id,
             session_name=self._session_name,
+            image_paths=image_paths,
         ):
+            if self._ai_cancel_event.is_set():
+                break
             self.app.call_from_thread(self._on_ai_event, event)
 
     def _on_ai_event(self, event) -> None:  # noqa: ANN001
@@ -779,6 +901,265 @@ class TerminalWidget(Widget):
         log.write(Text(f"  ✓ Model set to: {self._model}", style="#d4a017"))
 
     # ------------------------------------------------------------------
+    # /diff — show git working-tree diff in the terminal
+    # ------------------------------------------------------------------
+
+    def _cmd_diff(self, arg: str, log: RichLog) -> None:
+        """Show the git diff in the TUI.
+
+        Usage:
+            /diff            — full working-tree diff
+            /diff <path>     — diff of a single file or directory
+            /diff --staged   — show staged (cached) changes
+        """
+        from ..utils.git_ops import get_git_diff, is_git_repo
+
+        if not is_git_repo():
+            log.write(Text("  Not a git repository.", style="#cc2200"))
+            return
+
+        parts = arg.split() if arg else []
+        staged = False
+        path = ""
+        for p in parts:
+            if p in ("--staged", "--cached"):
+                staged = True
+            else:
+                path = p
+
+        result = get_git_diff(path=path or None, staged=staged)
+        log.write(Text.from_markup(result))
+
+    # ------------------------------------------------------------------
+    # /image — attach images to the next AI run (multimodal)
+    # ------------------------------------------------------------------
+
+    def _cmd_image(self, arg: str, log: RichLog) -> None:
+        """Attach / detach images to be sent with the next AI run.
+
+        Usage:
+            /image <path> [path ...]   attach one or more images
+            /image list                show currently attached images
+            /image clear               detach all images
+            /image drop <index>        remove a single attachment (1-based)
+        """
+        from ..utils.multimodal import is_image_file  # local import
+
+        parts = arg.split() if arg else []
+        if not parts:
+            self._show_attached_images(log)
+            return
+
+        sub = parts[0].lower()
+
+        if sub == "list":
+            self._show_attached_images(log)
+            return
+
+        if sub == "clear":
+            n = len(self._attached_images)
+            self._attached_images = []
+            log.write(Text(
+                f"  ✓ Detached {n} image(s).", style="#d4a017"
+            ))
+            return
+
+        if sub == "drop" and len(parts) >= 2:
+            try:
+                idx = int(parts[1]) - 1
+            except ValueError:
+                log.write(Text(
+                    f"  /image drop expects a 1-based index, got: {parts[1]}",
+                    style="#cc2200",
+                ))
+                return
+            if 0 <= idx < len(self._attached_images):
+                removed = self._attached_images.pop(idx)
+                log.write(Text(
+                    f"  ✓ Detached: {removed}", style="#d4a017"
+                ))
+            else:
+                log.write(Text(
+                    f"  Index out of range (have {len(self._attached_images)}).",
+                    style="#cc2200",
+                ))
+            return
+
+        # Default: treat all parts as image paths
+        added = []
+        skipped = []
+        for p in parts:
+            abs_p = p if os.path.isabs(p) else os.path.join(self._cwd, p)
+            if not os.path.exists(abs_p):
+                skipped.append((p, "not found"))
+                continue
+            if not is_image_file(abs_p):
+                skipped.append((p, "not an image"))
+                continue
+            if abs_p in self._attached_images:
+                continue  # already attached
+            self._attached_images.append(abs_p)
+            added.append(abs_p)
+
+        for path in added:
+            log.write(Text(
+                f"  ✓ Attached: [bold #ffd700]{os.path.basename(path)}[/bold #ffd700]",
+                style="#d4a017",
+            ))
+        for path, reason in skipped:
+            log.write(Text(
+                f"  ✗ Skipped {path}: {reason}", style="#cc2200"
+            ))
+
+        if added:
+            log.write(Text(
+                f"  {len(self._attached_images)} image(s) will be sent with the next /agent or /chat.",
+                style="#7a6b4a",
+            ))
+
+    def _show_attached_images(self, log: RichLog) -> None:
+        if not self._attached_images:
+            log.write(Text(
+                "  No images attached. Use /image <path> to add one.",
+                style="#7a6b4a",
+            ))
+            return
+        log.write(Text(
+            f"  Attached images ({len(self._attached_images)}):", style="bold #f5ecd0"
+        ))
+        for i, p in enumerate(self._attached_images, 1):
+            log.write(Text.from_markup(
+                f"    [#c8a800]{i}.[/#c8a800]  {p}"
+            ))
+        log.write(Text(
+            "  They will be sent with the next /agent, /chat, /assist, or /plan call.",
+            style="#7a6b4a",
+        ))
+
+    # ------------------------------------------------------------------
+    # /plugins — list (and reload) discovered plugin tools
+    # ------------------------------------------------------------------
+
+    def _cmd_plugins(self, arg: str, log: RichLog) -> None:
+        """Show loaded plugins and their tools.
+
+        Usage:
+            /plugins          list plugins + tools + any load errors
+            /plugins reload   re-discover entry points (useful in dev)
+        """
+        from ..agent.plugins import (
+            ENTRY_POINT_GROUP,
+            get_load_errors,
+            load_plugins,
+        )
+
+        parts = arg.split() if arg else []
+        if parts and parts[0].lower() == "reload":
+            tools = load_plugins(force_reload=True)
+            log.write(Text("  ✓ Plugins reloaded.", style="#d4a017"))
+        else:
+            tools = load_plugins()
+
+        if not tools:
+            log.write(Text(
+                f"  No plugins registered.  Install a package that exposes an "
+                f"entry point in the [bold]{ENTRY_POINT_GROUP}[/bold] group.",
+                style="#7a6b4a",
+            ))
+        else:
+            log.write(Text(
+                f"  Loaded {len(tools)} plugin tool(s):", style="bold #f5ecd0"
+            ))
+            for t in tools:
+                name = getattr(t, "name", "?")
+                desc = (getattr(t, "description", "") or "").splitlines()[0][:80]
+                log.write(Text.from_markup(
+                    f"    [#c8a800]⚙[/#c8a800]  [bold]{name}[/bold]  "
+                    f"[#7a6b4a]{desc}[/#7a6b4a]"
+                ))
+
+        errs = get_load_errors()
+        if errs:
+            log.write(Text(
+                f"  Plugin load errors ({len(errs)}):", style="#cc2200"
+            ))
+            for e in errs:
+                log.write(Text(f"    • {e}", style="#cc2200"))
+
+    # ------------------------------------------------------------------
+    # /api  — interactive provider/key management
+    # ------------------------------------------------------------------
+
+    def _cmd_api(self, arg: str, log: RichLog) -> None:
+        """Forward to APIManager: /api [show|set|model|url|test|remove|default ...]"""
+        from ..api_manager import APIManager  # local import — heavy Rich setup
+
+        mgr = APIManager()
+        parts = arg.split() if arg else []
+        sub = parts[0].lower() if parts else ""
+
+        if not sub or sub == "show":
+            mgr.show_status()
+            return
+
+        if sub == "set" and len(parts) >= 3:
+            mgr.set_key(parts[1], " ".join(parts[2:]))
+            return
+
+        if sub == "model" and len(parts) >= 3:
+            mgr.set_model(parts[1], parts[2])
+            return
+
+        if sub == "url" and len(parts) >= 3:
+            mgr.set_base_url(parts[1], " ".join(parts[2:]))
+            return
+
+        if sub == "test":
+            if len(parts) >= 2:
+                mgr.test_provider(parts[1])
+            else:
+                mgr.test_all()
+            return
+
+        if sub == "remove" and len(parts) >= 2:
+            mgr.remove_key(parts[1])
+            return
+
+        if sub == "default" and len(parts) >= 2:
+            mgr.set_default(parts[1])
+            return
+
+        log.write(Text("  Usage: /api [show|set|model|url|test|remove|default ...]", style="#7a6b4a"))
+        log.write(Text(
+            "    /api show                       show all providers",
+            style="#7a6b4a",
+        ))
+        log.write(Text(
+            "    /api set <provider> <key>       save an API key",
+            style="#7a6b4a",
+        ))
+        log.write(Text(
+            "    /api model <provider> <model>   set default model",
+            style="#7a6b4a",
+        ))
+        log.write(Text(
+            "    /api url <provider> <url>       set base URL (ollama, deepseek, openai_compat)",
+            style="#7a6b4a",
+        ))
+        log.write(Text(
+            "    /api test [provider]            test connectivity",
+            style="#7a6b4a",
+        ))
+        log.write(Text(
+            "    /api remove <provider>          clear a stored key",
+            style="#7a6b4a",
+        ))
+        log.write(Text(
+            "    /api default <provider>         set the active default",
+            style="#7a6b4a",
+        ))
+
+    # ------------------------------------------------------------------
     # /sessions
     # ------------------------------------------------------------------
 
@@ -867,24 +1248,59 @@ class TerminalWidget(Widget):
 
     def _cmd_export(self, arg: str, log: RichLog) -> None:
         from datetime import datetime
+        from ..utils.exporter import export_for_format
+
         if not self._conversation_log:
             log.write(Text("  No conversation to export.", style="#7a6b4a"))
             return
-        filename = arg.strip() if arg else f"commandor-{datetime.now():%Y%m%d-%H%M%S}.md"
-        if not filename.endswith(".md"):
+
+        # Parse: /export [fmt] [filename]
+        # Examples:
+        #   /export                       → markdown with default filename
+        #   /export my-session            → markdown → my-session.md
+        #   /export json                  → JSON with default filename
+        #   /export html report.html      → explicit filename
+        parts = arg.split() if arg else []
+        fmt = "md"
+        filename = ""
+        if parts and parts[0].lower() in ("md", "markdown", "json", "html"):
+            fmt = parts[0].lower()
+            parts = parts[1:]
+        if parts:
+            filename = " ".join(parts)
+
+        if not filename:
+            ext = "md" if fmt in ("md", "markdown") else fmt
+            filename = f"commandor-{datetime.now():%Y%m%d-%H%M%S}.{ext}"
+
+        # Ensure extension matches the format
+        if fmt in ("md", "markdown") and not filename.endswith((".md", ".markdown")):
             filename += ".md"
+        elif fmt == "json" and not filename.endswith(".json"):
+            filename += ".json"
+        elif fmt == "html" and not filename.endswith((".html", ".htm")):
+            filename += ".html"
+
         path = Path(self._cwd) / filename
-        lines = ["# Commandor Session Export\n\n"]
-        if self._session_name:
-            lines.append(f"**Session:** {self._session_name}\n\n")
-        lines.append(f"**Exported:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n---\n\n")
-        for entry in self._conversation_log:
-            if entry["role"] == "user":
-                lines.append(f"## ▸ {entry.get('mode', 'agent').upper()}\n\n{entry['content']}\n\n")
-            elif entry["role"] == "ai":
-                lines.append(f"## ◆ Commandor\n\n{entry['content']}\n\n---\n\n")
-        path.write_text("".join(lines))
-        log.write(Text(f"  ✓ Exported to: {path}", style="#d4a017"))
+        metadata = {
+            "provider": (self._provider or get_config().config.default_provider or ""),
+            "model":    (self._model or ""),
+        }
+        try:
+            content, _ = export_for_format(
+                fmt, self._conversation_log, self._session_name, metadata
+            )
+        except ValueError as exc:
+            log.write(Text(f"  {exc}", style="#cc2200"))
+            return
+
+        try:
+            path.write_text(content, encoding="utf-8")
+        except OSError as exc:
+            log.write(Text(f"  Failed to write export: {exc}", style="#cc2200"))
+            return
+
+        log.write(Text(f"  ✓ Exported ({fmt}) to: {path}", style="#d4a017"))
 
     def _cmd_pipe(self, arg: str, log: RichLog) -> None:
         if not arg:
@@ -965,16 +1381,24 @@ class TerminalWidget(Widget):
             pcfg = cfg.get_provider_config(provider_arg)
             model = pcfg.default_model if pcfg else ""
             log.write(Text(f"  ⚙  Setup: {provider_arg}  (model: {model})", style="#ffd700"))
-            log.write(Text("  Enter your API key (or press Enter to skip):", style="#f5ecd0"))
-            inp.placeholder = f"{provider_arg.upper()}_API_KEY"
+            if provider_arg in _PROVIDERS_REQUIRING_KEY:
+                log.write(Text("  Enter your API key (or press Enter to skip):", style="#f5ecd0"))
+                inp.placeholder = f"{provider_arg.upper()}_API_KEY"
+            else:
+                # Local providers don't need a key — go straight to model entry
+                log.write(Text(f"  {provider_arg} runs locally — no API key required.", style="#7a6b4a"))
+                log.write(Text("  Enter default model (e.g. llama3.1, qwen2.5-coder):", style="#f5ecd0"))
+                inp.placeholder = "model-name"
+                self._setup_state["step"] = "model_entry"
         else:
             self._setup_state = {"step": "provider_choice"}
             log.write(Text("  ⚙  Commandor Setup Wizard", style="bold #ffd700"))
             log.write(Text("  Available providers:", style="#f5ecd0"))
             for p in _PROVIDERS:
-                log.write(Text(f"    • {p}", style="#c8a800"))
+                tag = "" if p in _PROVIDERS_REQUIRING_KEY else "  [local]"
+                log.write(Text(f"    • {p}{tag}", style="#c8a800"))
             log.write(Text("  Which provider do you want to configure?", style="#f5ecd0"))
-            inp.placeholder = "gemini / anthropic / openai / openrouter"
+            inp.placeholder = "gemini / anthropic / openai / openrouter / ollama / groq / deepseek"
 
     def _handle_setup_input(self, value: str) -> None:
         log = self.query_one("#log", RichLog)
@@ -999,15 +1423,22 @@ class TerminalWidget(Widget):
                 log.write(Text("  Which provider?", style="#f5ecd0"))
                 return
             state["provider"] = name
-            state["step"] = "key_entry"
             cfg = get_config()
             pcfg = cfg.get_provider_config(name)
             existing = pcfg.api_key if pcfg else None
-            if existing:
-                log.write(Text(f"  Key already set for {name}. Enter new key to replace, or press Enter to keep.", style="#7a6b4a"))
+            if name in _PROVIDERS_REQUIRING_KEY:
+                state["step"] = "key_entry"
+                if existing:
+                    log.write(Text(f"  Key already set for {name}. Enter new key to replace, or press Enter to keep.", style="#7a6b4a"))
+                else:
+                    log.write(Text(f"  Enter API key for {name} (press Enter to skip):", style="#f5ecd0"))
+                inp.placeholder = f"{name.upper()}_API_KEY"
             else:
-                log.write(Text(f"  Enter API key for {name} (press Enter to skip):", style="#f5ecd0"))
-            inp.placeholder = f"{name.upper()}_API_KEY"
+                # Local / keyless provider → jump straight to model entry
+                state["step"] = "model_entry"
+                log.write(Text(f"  {name} runs locally — no API key required.", style="#7a6b4a"))
+                log.write(Text("  Enter default model (e.g. llama3.1, qwen2.5-coder):", style="#f5ecd0"))
+                inp.placeholder = "model-name"
 
         elif step == "key_entry":
             provider = state["provider"]
@@ -1035,11 +1466,24 @@ class TerminalWidget(Widget):
             log.write(Text("  Configure another provider? (y/n)", style="#f5ecd0"))
             inp.placeholder = "y / n"
 
+        elif step == "model_entry":
+            provider = state["provider"]
+            model = value.strip()
+            if model:
+                cfg = get_config()
+                cfg.set_provider_model(provider, model)
+                log.write(Text(f"  ✓ Default model for {provider} set to: {model}", style="#d4a017"))
+            else:
+                log.write(Text(f"  Skipped model for {provider}", style="#7a6b4a"))
+            state["step"] = "another_choice"
+            log.write(Text("  Configure another provider? (y/n)", style="#f5ecd0"))
+            inp.placeholder = "y / n"
+
         elif step == "another_choice":
             if value.strip().lower() in ("y", "yes"):
                 self._setup_state = {"step": "provider_choice"}
                 log.write(Text("  Which provider do you want to configure?", style="#f5ecd0"))
-                inp.placeholder = "gemini / anthropic / openai / openrouter"
+                inp.placeholder = "gemini / anthropic / openai / openrouter / ollama / groq / deepseek"
             else:
                 self._setup_state = None
                 inp.placeholder = ""
@@ -1099,9 +1543,30 @@ class TerminalWidget(Widget):
         inp.cursor_position = len(inp.value)
 
     def action_tab_complete(self) -> None:
-        """Tab-complete slash commands."""
+        """Tab-complete slash commands and @file references."""
         inp = self.query_one("#cmd-input", Input)
         val = inp.value
+        ref = _active_file_reference(val, inp.cursor_position)
+        if ref is not None:
+            start, end, prefix = ref
+            matches = _file_reference_matches(prefix, cwd=self._cwd)
+            if not matches:
+                return
+            completion = _file_reference_completion(prefix, matches)
+            if completion:
+                unique = len(matches) == 1
+                formatted = (
+                    _format_file_reference_completion(completion)
+                    if unique else completion
+                )
+                suffix = " " if unique and not completion.endswith("/") else ""
+                inp.value = val[:start] + "@" + formatted + suffix + val[end:]
+                inp.cursor_position = start + 1 + len(formatted) + len(suffix)
+            elif len(matches) > 1:
+                log = self.query_one("#log", RichLog)
+                log.write(Text("  " + "   ".join(f"@{m}" for m in matches[:12]), style="#7a6b4a"))
+            return
+
         # Only complete if input starts with / and has no space (no args yet)
         if not val.startswith("/") or " " in val:
             return
@@ -1113,10 +1578,206 @@ class TerminalWidget(Widget):
             log = self.query_one("#log", RichLog)
             log.write(Text("  " + "   ".join(matches), style="#7a6b4a"))
 
+    # ------------------------------------------------------------------
+    # Abort running AI worker (Ctrl+C)
+    # ------------------------------------------------------------------
+
+    def action_abort_ai(self) -> None:
+        """Cancel the currently running AI worker, if any.
+
+        No-op if the user is just typing in the input field and no AI is
+        active.  Pressing Ctrl+C always clears the input field first (a
+        common terminal convention), so the agent has to be running for
+        this to be a real abort.
+        """
+        inp = self.query_one("#cmd-input", Input)
+        if self._ai_worker is not None and self._ai_worker.is_running:
+            # Signal the streaming loop to stop processing further events.
+            # This won't kill the in-flight LLM HTTP call, but it stops
+            # the worker from dispatching any more events to the UI.
+            self._ai_cancel_event.set()
+            try:
+                self._ai_worker.cancel()
+            except Exception:
+                pass
+            self._ai_worker = None
+            log = self.query_one("#log", RichLog)
+            preview = self.query_one("#stream-preview", Static)
+            preview.display = False
+            log.write(Text.from_markup(
+                "  [#cc2200]■  AI worker aborted by user (Ctrl+C)[/#cc2200]"
+            ))
+            self._plan_items = []
+            self._plan_done = set()
+            try:
+                self.query_one("#plan-panel", Static).display = False
+            except Exception:
+                pass
+        else:
+            # No AI running — fall back to "clear current input"
+            if inp.value:
+                inp.value = ""
+
+    def _is_ai_cancelled(self) -> bool:
+        """Check (and reset) the AI cancellation event."""
+        if self._ai_cancel_event.is_set():
+            return True
+        return False
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _shell_escape_command(text: str) -> Optional[str]:
+    """Return the shell command from an explicit shell escape, or None.
+
+    Plain text is reserved for agent tasks.  Users can still run shell
+    commands with familiar terminal-style prefixes: ``$ ls`` or ``!git status``.
+    """
+    if text == "$":
+        return ""
+    if text.startswith("$ "):
+        return text[2:].strip()
+    if text.startswith("!"):
+        return text[1:].strip()
+    return None
+
+
+def _active_file_reference(
+    text: str,
+    cursor_position: Optional[int] = None,
+) -> Optional[tuple[int, int, str]]:
+    """Return (start, end, prefix) for the @file token at the cursor."""
+    cursor = len(text) if cursor_position is None else max(0, min(cursor_position, len(text)))
+    before_cursor = text[:cursor]
+    at = before_cursor.rfind("@")
+    if at < 0:
+        return None
+    if at > 0 and not text[at - 1].isspace() and text[at - 1] not in "([{,:=":
+        return None
+
+    prefix = before_cursor[at + 1:]
+    if any(ch.isspace() for ch in prefix):
+        return None
+
+    end = cursor
+    while end < len(text) and not text[end].isspace():
+        end += 1
+    return at, end, prefix
+
+
+def _normalise_file_ref_prefix(prefix: str) -> str:
+    """Normalise a typed @file prefix into a relative POSIX-style path."""
+    normalised = prefix.replace("\\", "/")
+    if normalised.startswith("./"):
+        normalised = normalised[2:]
+    return normalised
+
+
+def _format_file_reference_completion(path: str) -> str:
+    """Quote completed references that contain whitespace."""
+    if any(ch.isspace() for ch in path):
+        escaped = path.replace('"', '\\"')
+        return f'"{escaped}"'
+    return path
+
+
+def _file_reference_matches(
+    prefix: str,
+    cwd: str = "",
+    limit: int = 50,
+) -> list[str]:
+    """Return project file/directory matches for a typed @file prefix."""
+    base = Path(cwd or os.getcwd()).resolve()
+    typed = _normalise_file_ref_prefix(prefix)
+    root_only = typed == ""
+    has_dir_part = "/" in typed.rstrip("/")
+
+    try:
+        from ..utils.ignore import IgnoreMatcher  # noqa: PLC0415
+
+        matcher = IgnoreMatcher(base_dir=str(base))
+    except Exception:  # pragma: no cover - suggestions should degrade gracefully
+        matcher = None
+
+    def _ignored(rel: str) -> bool:
+        return bool(matcher and matcher.matches(rel.rstrip("/")))
+
+    matches: list[tuple[bool, str]] = []
+
+    try:
+        walker = os.walk(base)
+        for dirpath, dirnames, filenames in walker:
+            current = Path(dirpath)
+            try:
+                rel_dir = current.relative_to(base).as_posix()
+            except ValueError:
+                continue
+            if rel_dir == ".":
+                rel_dir = ""
+
+            kept_dirs: list[str] = []
+            for dirname in sorted(dirnames):
+                rel = f"{rel_dir}/{dirname}" if rel_dir else dirname
+                if dirname in _FILE_REF_SKIP_DIRS or _ignored(rel):
+                    continue
+                kept_dirs.append(dirname)
+            dirnames[:] = kept_dirs
+
+            entries: list[tuple[bool, str]] = []
+            entries.extend((True, d) for d in kept_dirs)
+            entries.extend((False, f) for f in sorted(filenames))
+
+            for is_dir, name in entries:
+                rel = f"{rel_dir}/{name}" if rel_dir else name
+                candidate = f"{rel}/" if is_dir else rel
+                if _ignored(rel):
+                    continue
+                if root_only:
+                    if "/" in rel:
+                        continue
+                    matched = True
+                elif has_dir_part:
+                    matched = candidate.startswith(typed)
+                else:
+                    matched = candidate.startswith(typed) or Path(rel).name.startswith(typed)
+                if matched:
+                    matches.append((is_dir, candidate))
+
+            if root_only:
+                break
+            if len(matches) >= limit:
+                break
+    except OSError:
+        return []
+
+    matches.sort(key=lambda item: (not item[0], item[1].lower(), len(item[1])))
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for _is_dir, candidate in matches:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        deduped.append(candidate)
+        if len(deduped) >= limit:
+            break
+    return deduped
+
+
+def _file_reference_completion(prefix: str, matches: list[str]) -> str:
+    """Return a completion for @file matches, or an empty string."""
+    if not matches:
+        return ""
+    typed = _normalise_file_ref_prefix(prefix)
+    if len(matches) == 1:
+        return matches[0]
+
+    common = os.path.commonprefix(matches)
+    if len(common) > len(typed) and not any(ch.isspace() for ch in common):
+        return common
+    return ""
+
 
 def _expand_files(text: str, cwd: str = "") -> tuple[str, list[str]]:
     """Expand @filename and @glob references to file contents inline.
@@ -1134,7 +1795,7 @@ def _expand_files(text: str, cwd: str = "") -> tuple[str, list[str]]:
     loaded: list[str] = []
 
     def _replace(m: re.Match) -> str:
-        pattern = m.group(1)
+        pattern = next(group for group in m.groups() if group is not None)
         # Resolve relative to the terminal's current working directory
         abs_pattern = pattern if _os.path.isabs(pattern) else _os.path.join(base, pattern)
         # Try glob expansion first (handles wildcards like src/**/*.py)
@@ -1160,5 +1821,5 @@ def _expand_files(text: str, cwd: str = "") -> tuple[str, list[str]]:
         except OSError:
             return m.group(0)  # leave unchanged if not found
 
-    result = re.sub(r"@([\w./\-*?\[\]]+)", _replace, text)
+    result = re.sub(r'@(?:"([^"]+)"|\'([^\']+)\'|([^\s]+))', _replace, text)
     return result, loaded

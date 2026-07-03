@@ -13,6 +13,7 @@ class ProviderConfig:
     enabled: bool = True
     api_key: Optional[str] = None
     default_model: str = ""
+    base_url: Optional[str] = None
 
 
 @dataclass
@@ -71,6 +72,29 @@ providers:
   openrouter:
     enabled: true
     default_model: anthropic/claude-3.5-sonnet
+    api_key: null
+
+  ollama:
+    enabled: true
+    default_model: llama3.1
+    base_url: http://localhost:11434
+    api_key: null
+
+  groq:
+    enabled: true
+    default_model: llama-3.3-70b-versatile
+    api_key: null
+
+  deepseek:
+    enabled: true
+    default_model: deepseek-chat
+    base_url: https://api.deepseek.com/v1
+    api_key: null
+
+  openai_compat:
+    enabled: true
+    default_model: local-model
+    base_url: http://localhost:1234/v1
     api_key: null
 
 agent:
@@ -137,6 +161,7 @@ ui:
                     "enabled": p.enabled,
                     "api_key": p.api_key,
                     "default_model": p.default_model,
+                    **({"base_url": p.base_url} if p.base_url else {}),
                 }
                 for name, p in self.config.providers.items()
             },
@@ -180,6 +205,16 @@ ui:
             )
         else:
             self.config.providers[name].default_model = model
+        self.save()
+
+    def set_provider_base_url(self, name: str, base_url: str) -> None:
+        """Set (or clear) the API base URL for a provider."""
+        if name not in self.config.providers:
+            self.config.providers[name] = ProviderConfig(
+                enabled=True, api_key=None, default_model="", base_url=base_url or None
+            )
+        else:
+            self.config.providers[name].base_url = base_url or None
         self.save()
 
     def get_enabled_providers(self) -> list:
@@ -228,6 +263,10 @@ def setup_interactive():
     print("2. Anthropic Claude (anthropic)")
     print("3. OpenAI GPT (openai)")
     print("4. OpenRouter (openrouter)")
+    print("5. Ollama local (ollama) — no API key required")
+    print("6. Groq (groq)")
+    print("7. DeepSeek (deepseek)")
+    print("8. OpenAI-compatible endpoint (openai_compat)")
 
     # Set up each provider
     providers_info = {
@@ -235,11 +274,19 @@ def setup_interactive():
         "anthropic": ("Anthropic Claude", "ANTHROPIC_API_KEY"),
         "openai": ("OpenAI", "OPENAI_API_KEY"),
         "openrouter": ("OpenRouter", "OPENROUTER_API_KEY"),
+        "ollama": ("Ollama local", ""),
+        "groq": ("Groq", "GROQ_API_KEY"),
+        "deepseek": ("DeepSeek", "DEEPSEEK_API_KEY"),
+        "openai_compat": ("OpenAI-compatible endpoint", "OPENAI_COMPAT_API_KEY"),
     }
 
     for key, (name, env_var) in providers_info.items():
         pconfig = config.get_provider_config(key)
         if pconfig:
+            if not env_var:
+                pconfig.enabled = True
+                print(f"\n{name} enabled (no API key required)")
+                continue
             env_key = env_var
             api_key = os.environ.get(env_key)
 
@@ -310,6 +357,9 @@ def get_api_key(provider: str) -> Optional[str]:
         "anthropic": "ANTHROPIC_API_KEY",
         "openai": "OPENAI_API_KEY",
         "openrouter": "OPENROUTER_API_KEY",
+        "groq": "GROQ_API_KEY",
+        "deepseek": "DEEPSEEK_API_KEY",
+        "openai_compat": "OPENAI_COMPAT_API_KEY",
     }
 
     return os.environ.get(env_map.get(provider, f"{provider.upper()}_API_KEY"))

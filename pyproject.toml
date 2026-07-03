@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "commandor-ai"
-version = "0.2.1"
+version = "0.3.0"
 description = "Agentic CLI - Autonomous coding assistant with multi-provider AI support"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -55,6 +55,10 @@ dependencies = [
   "langgraph-checkpoint-sqlite>=3.0.0",
   "prompt_toolkit>=3.0.0",
   "textual>=0.80.0",
+  "tiktoken>=0.7.0",
+  "beautifulsoup4>=4.12.0",
+  "langchain-ollama>=0.2.0",
+  "langchain-groq>=0.2.0",
 ]
 
 [project.optional-dependencies]
