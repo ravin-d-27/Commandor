@@ -26,8 +26,7 @@ validated without calling a provider.
 
 ## Running
 
-    python -m pip install pytest
-    python -m pip install httpx beautifulsoup4 tiktoken pyyaml rich
+    python -m pip install -e ".[dev]"
     python -m pytest -v
 
 The git tests are skipped automatically on systems without a ``git``

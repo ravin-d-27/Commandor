@@ -22,20 +22,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Install minimal test deps
+      - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest pytest-cov
-          # Install the runtime deps so the new modules that depend on
-          # them (multimodal, web_ops, tokenizer) can import.
-          python -m pip install \
-              httpx \
-              beautifulsoup4 \
-              tiktoken \
-              pyyaml \
-              rich
-          # LangChain is only needed for the integration tests in
-          # agent/, which are out of scope for the test suite in tests/.
+          python -m pip install -e ".[dev]"
 
       - name: Run tests
         run: |
