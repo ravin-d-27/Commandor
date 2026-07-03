@@ -1,6 +1,6 @@
 """LangGraph-based agent executor.
 
-Public API (backward-compatible with terminal.py):
+Public API (kept backward-compatible for legacy callers):
     run_agent(task, mode, provider, model, thread_id, verbose, session_name) -> AgentResult
     run_agent_interactive(task, mode, provider, model, thread_id) -> AgentResult
     test_providers() -> dict

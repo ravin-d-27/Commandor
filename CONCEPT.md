@@ -1,74 +1,121 @@
 # Commandor Concepts & Architecture
 
-This document explains the core concepts, architecture, and file responsibilities of the Commandor project.
+This document explains the core concepts, architecture, and file responsibilities
+of the Commandor project.
 
 ## Overview
 
-Commandor is an AI-powered coding assistant embedded in your terminal. It uses a graph-based agentic workflow to help developers explore codebases, plan changes, implement features, and run commands autonomously or with human oversight.
+Commandor is an AI-powered coding assistant embedded in a Textual terminal UI.
+It uses a LangGraph ReAct workflow to explore codebases, plan changes, call tools,
+edit files, run commands, and summarize results. In the TUI, plain text is treated
+as an agent task by default; slash commands are still available for explicit modes
+and utility actions.
 
-## Core Architecture
+## Interaction Model
 
-Commandor is built on **LangGraph**, which allows for complex, stateful multi-turn interactions. The agent's brain is a "ReAct" (Reasoning and Acting) loop that decides whether to provide a text response or call a tool.
+Commandor supports four execution modes:
 
-### Interaction Modes
+1. **Agent mode (`agent`)**: Fully autonomous. This is the default for plain TUI
+   input and for `/agent <task>`. The agent can read files, call tools, edit code,
+   run commands, and create a live task plan for multi-step work.
+2. **Assist mode (`assist`)**: Agent mode with confirmation before tool execution.
+3. **Plan mode (`plan`)**: Produces a plan first, then executes after approval.
+4. **Chat mode (`chat`)**: Conversation only, with no tools.
 
-Commandor supports two primary modes of operation, defined in `commandor/agent/modes.py` and implemented in `commandor/agent/executor.py`:
-
-1.  **Agent Mode (`agent`)**: Fully autonomous. The agent uses all available tools to complete a task without asking for permission. For complex multi-step tasks, the agent can create a live task plan that displays progress in real-time.
-2.  **Chat Mode (`chat`)**: A pure conversational mode with no tools. Useful for asking questions about code or general programming concepts.
+Shell commands are explicit in the TUI: prefix them with `$ ` or `!`, for example
+`$ git status`. This keeps normal prose available for natural agent tasks.
 
 ## Project Structure
 
 ### `commandor/` (Core Package)
-- `__main__.py`: The CLI entry point.
-- `terminal.py`: The heart of the interactive session. Handles command parsing (e.g., `/agent`, `/sessions`), `@filepath` reference expansion, and the main loop.
-- `tui.py`: Custom `prompt_toolkit` implementation for the interactive prompt, including the status toolbar (metrics, session name).
-- `session_manager.py`: Manages session persistence, listing, and automatic naming using LLM-generated slugs.
-- `api_manager.py`: Specialized manager for API keys and default model configurations across multiple providers.
-- `config.py`: Handles global user configuration (YAML-based) and provider settings.
+- `__main__.py`: CLI entry point and non-interactive command handling.
+- `textual_app.py`: Textual application shell.
+- `widgets/terminal_widget.py`: Main interactive terminal. Handles natural agent
+  input, slash commands, shell escapes, command history, `@` file suggestions,
+  image attachments, sessions, exports, and rendering streamed events.
+- `agent_bridge.py`: Converts LangGraph streaming output into typed TUI events.
+  Includes recovery for provider streams that return tool output but no final
+  generation.
+- `session_manager.py`: Named session registry stored in
+  `~/.commandor/sessions.json`.
+- `api_manager.py`: Interactive provider/API-key management helpers.
+- `config.py`: YAML configuration, provider defaults, API key resolution, and
+  setup support.
 
 ### `commandor/agent/` (The Brain)
-- `lc_graph.py`: Defines the LangGraph state machines (Agent, Assist, Chat) and initializes the `SqliteSaver` checkpointer for persistent memory.
-- `lc_tools.py`: LangChain `@tool` wrappers around utility functions. Includes logic for diff display on file mutation.
-- `executor.py`: Orchestrates graph execution. Handles streaming output, thinking blocks, context condensation, and token metrics.
-- `lc_models.py`: Factory for instantiating LLMs (Gemini, Anthropic, OpenAI, OpenRouter) with appropriate configurations.
-- `modes.py`: Simple registry of available agent modes and their descriptions.
+- `lc_graph.py`: LangGraph graph factories and shared SQLite checkpointer.
+- `lc_models.py`: Model factory for Gemini, Anthropic, OpenAI, OpenRouter, Ollama,
+  Groq, DeepSeek, and OpenAI-compatible endpoints.
+- `lc_tools.py`: LangChain `@tool` wrappers around file, shell, web, git,
+  delegation, and task-plan helpers.
+- `executor.py`: Non-TUI orchestration for agent/chat/assist/plan modes.
+- `plugins.py`: Entry-point based plugin discovery for custom tools exposed via
+  the `commandor.tools` group.
+- `subagent.py`: Short-lived focused sub-agents and parallel delegation.
+- `modes.py`: Mode registry and descriptions.
 
 ### `commandor/utils/` (Utilities)
-- `file_ops.py`: Low-level file system operations (read, write, edit, glob, search).
-- `shell.py`: Utilities for running shell commands and gathering system/git context.
-- `diff_display.py`: Uses `rich` to render beautiful, colorized unified diffs when files are modified.
+- `file_ops.py`: Low-level file read/write/edit/glob/search operations.
+- `shell.py`: Shell execution, `cd`, environment, git summary, and safety checks.
+- `git_ops.py`: Git status, diff, commit, and log helpers.
+- `web_ops.py`: URL fetch and generic HTTP request helpers.
+- `ignore.py`: `.commandorignore` parser and matcher.
+- `multimodal.py`: Image validation and data-URL encoding for vision models.
+- `exporter.py`: Markdown, JSON, and HTML conversation exporters.
+- `tokenizer.py`: tiktoken-backed token counting with fallback behavior.
+- `diff_display.py`: Unified Rich diff display.
+- `diff_side_by_side.py`: Side-by-side syntax-highlighted diff rows/rendering.
 
 ## Key Concepts
 
+### Natural TUI Input
+The TUI routes plain text to agent mode. Users can type `fix the failing tests`
+instead of `/agent fix the failing tests`. Explicit slash commands remain useful
+for `/chat`, `/assist`, `/plan`, `/provider`, `/plugins`, `/image`, `/export`,
+and other utility commands.
+
+### `@` File References
+The TUI supports `@path/to/file` references. While typing, `@` opens a live file
+list from the current project; Tab completes the active reference. Quoted paths
+with spaces are supported, for example `@"docs/My File.md"`.
+
+Before sending the task to the model, Commandor expands matched references into
+fenced code blocks so the model gets the file content immediately. Glob patterns
+such as `@tests/**/*.py` are also supported.
+
 ### Persistent Memory
-Commandor uses a local SQLite database at `~/.commandor/checkpoints.db` to store conversation states. Every session has a unique `thread_id`, allowing you to resume work across terminal restarts.
+LangGraph checkpoints are stored in SQLite at `~/.commandor/checkpoints.db`.
+Each session has a thread ID, and named session metadata is stored separately so
+work can continue across terminal restarts.
 
-### Context Management & Condensation
-To prevent "context window overflow" in long-running tasks, `executor.py` includes a **summarization hook**. When the message history exceeds a model-specific threshold (e.g., 80% of the context window), Commandor:
-1.  Summarizes the older part of the conversation.
-2.  Replaces those messages with a single "Context summary" block.
-3.  Preserves recent messages to maintain immediate context.
+### Context Management
+`executor.py` and `agent_bridge.py` use a summarization hook to condense older
+conversation history when a model approaches its context limit. Token estimation
+uses `tiktoken` when available and falls back gracefully.
 
-### Intelligent Context Expansion
-The terminal supports **`@filepath` references**. Before sending a task to the agent, Commandor scans the input for `@path/to/file` tokens and automatically inlines the file's content into the prompt within `<file>` XML tags. This provides the agent with immediate access to relevant code without requiring it to use a "read" tool first.
+### Provider System
+Provider selection is centralized in `lc_models.py`. Hosted providers use API
+keys from config or environment variables. Ollama is keyless and uses a local
+base URL. OpenAI-compatible endpoints can be pointed at local or custom servers.
 
-### Session Management
-Sessions can be named and managed via `/sessions`.
-- **Auto-naming**: When starting a new task in an unnamed session, Commandor uses a quick LLM call to generate a relevant kebab-case name (e.g., `fix-auth-bug`).
-- **Persistence**: Session metadata is stored in `~/.commandor/sessions.json`.
+### Tooling & Extensibility
+The built-in tools cover file operations, shell execution, web/HTTP requests,
+git operations, task planning, and sub-agent delegation. Installed packages can
+add tools by exposing a `commandor.tools` entry point; `/plugins` lists or reloads
+them in the TUI.
 
-### Safety & Diffs
-When an agent modifies a file using `write_file_tool`, `edit_file_tool`, or `patch_file_tool`, it captures the "before" and "after" states. `diff_display.py` then renders a visual diff so the user can verify exactly what changed. In `assist` mode, these changes are staged and only applied after explicit user confirmation.
+### Safety & Visibility
+`.commandorignore` protects files and directories from agent access. Destructive
+shell patterns are blocked. File mutations display diffs, and side-by-side diffs
+are available when enabled. The TUI shows tool calls, tool output, live task
+plans, context usage, and completion metrics.
 
-### Real-time Metrics
-The interactive prompt displays real-time metrics in the bottom toolbar:
-- **Tokens**: Input/Output tokens for the last operation.
-- **Context**: Approximate total tokens currently in the conversation buffer.
-- **Cost**: Estimated session cost (if supported by the provider).
+### Multimodal & Export
+`/image` attaches images to the next AI run for vision-capable models. `/export`
+saves conversation history as Markdown, JSON, or HTML.
 
-### Live Task Planning
-For complex multi-step tasks, the agent can create a task plan that displays in the TUI in real-time:
-- The agent calls `create_task_plan(tasks=[...])` to display a numbered todo list
-- As each step completes, the agent calls `complete_task(index=N)` to check off items
-- The task panel updates live in the TUI, showing current progress with visual indicators
+### Tests & CI
+The repository includes pytest coverage for config, file operations, ignore
+rules, token counting, exporters, web/git helpers, plugins, multimodal handling,
+the agent bridge, and TUI input helpers. The GitHub Actions workflow runs the
+test suite for PR and merge validation.

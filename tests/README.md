@@ -17,10 +17,12 @@ This directory contains the pytest-based test suite for Commandor.
         test_shell.py            run_command (no LLM)
         test_config.py           ConfigManager + get_api_key
         test_plugins.py          entry-point-based plugin loader
+        test_agent_bridge.py     stream recovery/current-turn helpers
+        test_terminal_widget.py  shell escape + @file reference helpers
 
-Tests deliberately avoid live LLM calls and the network: integration
-tests for the LangGraph agents live outside this directory (the
-`agent_bridge` and `executor` modules need full LangChain deps).
+Tests deliberately avoid live LLM calls and the network. Agent bridge
+coverage focuses on pure helper behavior and recovery logic that can be
+validated without calling a provider.
 
 ## Running
 

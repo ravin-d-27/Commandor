@@ -114,6 +114,20 @@ _ALL_SLASH_CMDS = sorted([
 
 _HISTORY_FILE = Path.home() / ".commandor" / "history"
 _HISTORY_MAX = 1000
+_FILE_REF_SKIP_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+    ".venv",
+}
 
 HELP_TEXT = """\
 # Commandor — AI Terminal Help
@@ -187,6 +201,10 @@ or execute directly based on the complexity of the task.
 ## Copy / Paste
 Use **Shift+drag** to select text (bypasses mouse reporting).
 Standard terminal copy (Ctrl+Shift+C / right-click) then works normally.
+
+## File References
+Type `@` anywhere in a task to browse project files. Keep typing to narrow the
+list, then press Tab to complete the active file reference.
 """
 
 
@@ -387,7 +405,7 @@ class TerminalWidget(Widget):
             self.action_tab_complete()
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        """Show live slash-command hints in the stream-preview as the user types."""
+        """Show live slash-command and @file hints as the user types."""
         # Never overwrite an active AI stream
         if self._ai_worker is not None and self._ai_worker.is_running:
             return
@@ -398,6 +416,17 @@ class TerminalWidget(Widget):
             if matches:
                 preview.display = True
                 preview.update(Text("  " + "   ".join(matches), style="#7a6b4a"))
+                return
+        inp = self.query_one("#cmd-input", Input)
+        ref = _active_file_reference(val, inp.cursor_position)
+        if ref is not None:
+            _start, _end, prefix = ref
+            matches = _file_reference_matches(prefix, cwd=self._cwd)
+            if matches:
+                shown = "   ".join(f"@{m}" for m in matches[:12])
+                suffix = "   …" if len(matches) > 12 else ""
+                preview.display = True
+                preview.update(Text(f"  {shown}{suffix}", style="#7a6b4a"))
                 return
         preview.display = False
 
@@ -1514,9 +1543,30 @@ class TerminalWidget(Widget):
         inp.cursor_position = len(inp.value)
 
     def action_tab_complete(self) -> None:
-        """Tab-complete slash commands."""
+        """Tab-complete slash commands and @file references."""
         inp = self.query_one("#cmd-input", Input)
         val = inp.value
+        ref = _active_file_reference(val, inp.cursor_position)
+        if ref is not None:
+            start, end, prefix = ref
+            matches = _file_reference_matches(prefix, cwd=self._cwd)
+            if not matches:
+                return
+            completion = _file_reference_completion(prefix, matches)
+            if completion:
+                unique = len(matches) == 1
+                formatted = (
+                    _format_file_reference_completion(completion)
+                    if unique else completion
+                )
+                suffix = " " if unique and not completion.endswith("/") else ""
+                inp.value = val[:start] + "@" + formatted + suffix + val[end:]
+                inp.cursor_position = start + 1 + len(formatted) + len(suffix)
+            elif len(matches) > 1:
+                log = self.query_one("#log", RichLog)
+                log.write(Text("  " + "   ".join(f"@{m}" for m in matches[:12]), style="#7a6b4a"))
+            return
+
         # Only complete if input starts with / and has no space (no args yet)
         if not val.startswith("/") or " " in val:
             return
@@ -1594,6 +1644,141 @@ def _shell_escape_command(text: str) -> Optional[str]:
     return None
 
 
+def _active_file_reference(
+    text: str,
+    cursor_position: Optional[int] = None,
+) -> Optional[tuple[int, int, str]]:
+    """Return (start, end, prefix) for the @file token at the cursor."""
+    cursor = len(text) if cursor_position is None else max(0, min(cursor_position, len(text)))
+    before_cursor = text[:cursor]
+    at = before_cursor.rfind("@")
+    if at < 0:
+        return None
+    if at > 0 and not text[at - 1].isspace() and text[at - 1] not in "([{,:=":
+        return None
+
+    prefix = before_cursor[at + 1:]
+    if any(ch.isspace() for ch in prefix):
+        return None
+
+    end = cursor
+    while end < len(text) and not text[end].isspace():
+        end += 1
+    return at, end, prefix
+
+
+def _normalise_file_ref_prefix(prefix: str) -> str:
+    """Normalise a typed @file prefix into a relative POSIX-style path."""
+    normalised = prefix.replace("\\", "/")
+    if normalised.startswith("./"):
+        normalised = normalised[2:]
+    return normalised
+
+
+def _format_file_reference_completion(path: str) -> str:
+    """Quote completed references that contain whitespace."""
+    if any(ch.isspace() for ch in path):
+        escaped = path.replace('"', '\\"')
+        return f'"{escaped}"'
+    return path
+
+
+def _file_reference_matches(
+    prefix: str,
+    cwd: str = "",
+    limit: int = 50,
+) -> list[str]:
+    """Return project file/directory matches for a typed @file prefix."""
+    base = Path(cwd or os.getcwd()).resolve()
+    typed = _normalise_file_ref_prefix(prefix)
+    root_only = typed == ""
+    has_dir_part = "/" in typed.rstrip("/")
+
+    try:
+        from ..utils.ignore import IgnoreMatcher  # noqa: PLC0415
+
+        matcher = IgnoreMatcher(base_dir=str(base))
+    except Exception:  # pragma: no cover - suggestions should degrade gracefully
+        matcher = None
+
+    def _ignored(rel: str) -> bool:
+        return bool(matcher and matcher.matches(rel.rstrip("/")))
+
+    matches: list[tuple[bool, str]] = []
+
+    try:
+        walker = os.walk(base)
+        for dirpath, dirnames, filenames in walker:
+            current = Path(dirpath)
+            try:
+                rel_dir = current.relative_to(base).as_posix()
+            except ValueError:
+                continue
+            if rel_dir == ".":
+                rel_dir = ""
+
+            kept_dirs: list[str] = []
+            for dirname in sorted(dirnames):
+                rel = f"{rel_dir}/{dirname}" if rel_dir else dirname
+                if dirname in _FILE_REF_SKIP_DIRS or _ignored(rel):
+                    continue
+                kept_dirs.append(dirname)
+            dirnames[:] = kept_dirs
+
+            entries: list[tuple[bool, str]] = []
+            entries.extend((True, d) for d in kept_dirs)
+            entries.extend((False, f) for f in sorted(filenames))
+
+            for is_dir, name in entries:
+                rel = f"{rel_dir}/{name}" if rel_dir else name
+                candidate = f"{rel}/" if is_dir else rel
+                if _ignored(rel):
+                    continue
+                if root_only:
+                    if "/" in rel:
+                        continue
+                    matched = True
+                elif has_dir_part:
+                    matched = candidate.startswith(typed)
+                else:
+                    matched = candidate.startswith(typed) or Path(rel).name.startswith(typed)
+                if matched:
+                    matches.append((is_dir, candidate))
+
+            if root_only:
+                break
+            if len(matches) >= limit:
+                break
+    except OSError:
+        return []
+
+    matches.sort(key=lambda item: (not item[0], item[1].lower(), len(item[1])))
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for _is_dir, candidate in matches:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        deduped.append(candidate)
+        if len(deduped) >= limit:
+            break
+    return deduped
+
+
+def _file_reference_completion(prefix: str, matches: list[str]) -> str:
+    """Return a completion for @file matches, or an empty string."""
+    if not matches:
+        return ""
+    typed = _normalise_file_ref_prefix(prefix)
+    if len(matches) == 1:
+        return matches[0]
+
+    common = os.path.commonprefix(matches)
+    if len(common) > len(typed) and not any(ch.isspace() for ch in common):
+        return common
+    return ""
+
+
 def _expand_files(text: str, cwd: str = "") -> tuple[str, list[str]]:
     """Expand @filename and @glob references to file contents inline.
 
@@ -1610,7 +1795,7 @@ def _expand_files(text: str, cwd: str = "") -> tuple[str, list[str]]:
     loaded: list[str] = []
 
     def _replace(m: re.Match) -> str:
-        pattern = m.group(1)
+        pattern = next(group for group in m.groups() if group is not None)
         # Resolve relative to the terminal's current working directory
         abs_pattern = pattern if _os.path.isabs(pattern) else _os.path.join(base, pattern)
         # Try glob expansion first (handles wildcards like src/**/*.py)
@@ -1636,5 +1821,5 @@ def _expand_files(text: str, cwd: str = "") -> tuple[str, list[str]]:
         except OSError:
             return m.group(0)  # leave unchanged if not found
 
-    result = re.sub(r"@([\w./\-*?\[\]]+)", _replace, text)
+    result = re.sub(r'@(?:"([^"]+)"|\'([^\']+)\'|([^\s]+))', _replace, text)
     return result, loaded

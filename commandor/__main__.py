@@ -45,7 +45,10 @@ def main():
     )
     parser.add_argument(
         "-p", "--provider",
-        help="AI provider to use (gemini, anthropic, openai, openrouter)"
+        help=(
+            "AI provider to use (gemini, anthropic, openai, openrouter, "
+            "ollama, groq, deepseek, openai_compat)"
+        )
     )
     parser.add_argument(
         "-m", "--model",

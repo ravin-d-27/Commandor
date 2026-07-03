@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="commandor-ai",
-    version="0.2.1",
+    version="0.3.0",
     description="Agentic CLI - Autonomous coding assistant",
     long_description=long_description,
     long_description_content_type="text/markdown",
