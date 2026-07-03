@@ -26,17 +26,8 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
-from langchain_core.messages import HumanMessage
-
-from .executor import (
-    _build_first_message,
-    _build_system_prompt,
-    _make_summarize_hook,
-    _resolve_provider_model,
-)
 from .lc_graph import build_agent_graph, build_chat_graph, get_checkpointer
 from .lc_models import build_model
-from .lc_tools import DANGEROUS_TOOL_NAMES
 from .plugins import get_all_tools_with_plugins
 
 # Cap on concurrent sub-agents
@@ -57,6 +48,15 @@ def _run_subagent(
 
     Returns a plain string suitable for inclusion in a tool result.
     """
+    # Import executor helpers lazily to avoid the startup cycle:
+    # executor -> lc_tools -> subagent -> executor.
+    from .executor import (  # noqa: PLC0415
+        _build_first_message,
+        _build_system_prompt,
+        _make_summarize_hook,
+        _resolve_provider_model,
+    )
+
     try:
         resolved_provider, api_key, resolved_model, resolved_base_url = (
             _resolve_provider_model(provider, model)

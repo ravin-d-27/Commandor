@@ -66,9 +66,9 @@ def get_encoding(model: str = "gpt-4o"):
 # This avoids calling encoding_for_model() (which downloads a mapping
 # from the internet) for models that obviously use cl100k or o200k.
 _TIKTOKEN_MODEL_HINTS: dict[str, str] = {
-    "gpt-4": "cl100k_base",
     "gpt-4o": "o200k_base",
     "gpt-4o-mini": "o200k_base",
+    "gpt-4": "cl100k_base",
     "gpt-4-turbo": "cl100k_base",
     "gpt-3.5-turbo": "cl100k_base",
     "o1": "o200k_base",
@@ -84,7 +84,11 @@ _TIKTOKEN_MODEL_HINTS: dict[str, str] = {
 def _pick_encoding_name(model: str) -> Optional[str]:
     """Best-effort: return a tiktoken encoding name for *model*."""
     m = (model or "").lower()
-    for prefix, enc_name in _TIKTOKEN_MODEL_HINTS.items():
+    for prefix, enc_name in sorted(
+        _TIKTOKEN_MODEL_HINTS.items(),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    ):
         if prefix in m:
             return enc_name
     return None

@@ -148,10 +148,6 @@ def _compute_rows(
     if not hunks:
         return [], []
 
-    # Apply context windowing
-    consumed_to_old = 0
-    consumed_to_new = 0
-
     for hi, (i1, i2, j1, j2) in enumerate(hunks):
         # Pre-context
         if hi == 0:
@@ -162,15 +158,9 @@ def _compute_rows(
             pre_old_start = pi2 if pi2 < i1 - context else i1
             pre_new_start = pj2 if pj2 < j1 - context else j1
 
-        # Emit the pre-context (only on the first block, or when there's a gap)
-        if hi == 0 or pre_old_start < i1 or pre_new_start < j1:
-            for k in range(pre_old_start, i1):
-                rows.append((
-                    "equal", k + 1, old_lines[k],
-                    k - pre_old_start + pre_new_start + 1, new_lines[k - pre_old_start + pre_new_start],
-                ))
-        elif hi > 0:
-            # No pre-context; just emit a "..." separator
+        if hi > 0 and not (
+            pre_old_start < i1 or pre_new_start < j1
+        ):
             rows.append(("pad", None, "…", None, "…"))
 
         # Hunk header
@@ -178,6 +168,14 @@ def _compute_rows(
             "hunk", None, f"@@ -{i1 + 1},{i2 - i1} +{j1 + 1},{j2 - j1} @@",
             None, "",
         ))
+
+        # Emit the pre-context (only on the first block, or when there's a gap)
+        if hi == 0 or pre_old_start < i1 or pre_new_start < j1:
+            for k in range(pre_old_start, i1):
+                rows.append((
+                    "equal", k + 1, old_lines[k],
+                    k - pre_old_start + pre_new_start + 1, new_lines[k - pre_old_start + pre_new_start],
+                ))
 
         # Side-by-side alignment of the change block
         old_block = old_lines[i1:i2]

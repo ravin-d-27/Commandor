@@ -35,8 +35,7 @@ Public API:
 
 from __future__ import annotations
 
-import importlib
-import importlib.metadata
+from importlib.metadata import entry_points
 from typing import Callable
 
 ENTRY_POINT_GROUP = "commandor.tools"
@@ -48,7 +47,7 @@ _load_errors: list[str] = []
 def _discover_entry_points() -> list:
     """Iterate over every registered entry point in the commandor.tools group."""
     try:
-        eps = importlib.metadata.entry_points(group=ENTRY_POINT_GROUP)
+        eps = entry_points(group=ENTRY_POINT_GROUP)
     except Exception as exc:
         _load_errors.append(f"entry-point discovery failed: {exc}")
         return []
@@ -127,11 +126,11 @@ def get_load_errors() -> list[str]:
     return list(_load_errors)
 
 
-def get_all_tools_with_plugins() -> list:
+def get_all_tools_with_plugins(force_reload: bool = False) -> list:
     """Return ALL_TOOLS plus any plugin tools.
 
     Imports ALL_TOOLS lazily to avoid a circular import (lc_tools imports
     plugin-aware code at call-time, not at module-load time).
     """
     from .lc_tools import ALL_TOOLS  # noqa: PLC0415
-    return list(ALL_TOOLS) + load_plugins()
+    return list(ALL_TOOLS) + load_plugins(force_reload=force_reload)

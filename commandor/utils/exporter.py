@@ -143,6 +143,7 @@ def _md_to_html(text: str) -> str:
             paragraph = []
 
     def _inline_md(s: str) -> str:
+        s = html.escape(s)
         # inline code
         s = _replace_pairs(s, "`", "<code>", "</code>")
         # bold
@@ -289,8 +290,8 @@ def export_html(
 # ---------------------------------------------------------------------------
 
 EXPORTERS = {
-    "md":       ("markdown", export_markdown),
-    "markdown": ("markdown", export_markdown),
+    "md":       ("md",       export_markdown),
+    "markdown": ("md",       export_markdown),
     "json":     ("json",     export_json),
     "html":     ("html",     export_html),
 }
@@ -309,5 +310,5 @@ def export_for_format(
             f"Unknown export format: '{fmt}'.  "
             f"Supported: {', '.join(sorted(EXPORTERS))}"
         )
-    label, fn = EXPORTERS[fmt]
-    return fn(log, session_name, metadata), fmt
+    extension, fn = EXPORTERS[fmt]
+    return fn(log, session_name, metadata), extension

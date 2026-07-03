@@ -7,6 +7,7 @@ Entry point for commandor command
 import sys
 import argparse
 from . import config
+from . import __version__
 from .agent import run_agent
 
 
@@ -71,7 +72,7 @@ def main():
     args = parser.parse_args()
 
     if args.version:
-        print("Commandor v0.2.0")
+        print(f"Commandor v{__version__}")
         print("Agentic CLI - Autonomous coding assistant")
         return 0
 

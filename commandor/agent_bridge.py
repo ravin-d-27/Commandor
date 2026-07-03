@@ -41,6 +41,11 @@ from .agent.plugins import get_all_tools_with_plugins
 from .utils.multimodal import build_multimodal_message, is_image_file
 
 
+# Gemini/LangChain can raise this after successful tool calls if the final
+# streamed model response is empty. Treat it as recoverable in the TUI bridge.
+_EMPTY_GENERATION_MARKER = "No generations found in stream"
+
+
 # ---------------------------------------------------------------------------
 # Event types
 # ---------------------------------------------------------------------------
@@ -116,6 +121,91 @@ def _drain_plan_queue(plan_queue: list) -> Generator:
             yield PlanCreatedEvent(items=ev[1])
         elif ev[0] == "task_done":
             yield PlanItemDoneEvent(index=ev[1])
+
+
+def _is_empty_generation_error(exc: Exception) -> bool:
+    """Return True for provider stream failures with no final generation."""
+    return _EMPTY_GENERATION_MARKER in str(exc)
+
+
+def _content_to_text(content) -> str:  # noqa: ANN001
+    """Normalise LangChain message content into readable text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                parts.append(str(block.get("text") or block.get("content") or ""))
+        return "\n".join(p for p in parts if p)
+    return str(content or "")
+
+
+def _current_turn_messages(state_values: dict) -> list:
+    """Return messages belonging to the latest user turn."""
+    messages = state_values.get("messages", [])
+    last_human_idx = -1
+    for idx, msg in enumerate(messages):
+        if isinstance(msg, HumanMessage):
+            last_human_idx = idx
+    return messages[last_human_idx:] if last_human_idx >= 0 else messages
+
+
+def _extract_current_turn_answer(state_values: dict) -> str:
+    """Extract an AI answer without falling back to a previous turn."""
+    return _extract_final_answer({"messages": _current_turn_messages(state_values)})
+
+
+def _build_recovery_prompt(task: str, state_values: dict) -> str:
+    """Build a compact synthesis prompt from current-turn tool results."""
+    tool_sections: list[str] = []
+    other_sections: list[str] = []
+
+    for msg in _current_turn_messages(state_values):
+        text = _content_to_text(getattr(msg, "content", "")).strip()
+        if not text:
+            continue
+        if isinstance(msg, ToolMessage):
+            tool_sections.append(text)
+        elif not isinstance(msg, HumanMessage):
+            other_sections.append(text)
+
+    evidence = "\n\n---\n\n".join(tool_sections or other_sections)
+    if len(evidence) > 12_000:
+        evidence = evidence[-12_000:]
+
+    return (
+        "The agent used tools for the user task, but the provider returned an "
+        "empty final streamed generation. Based only on the current turn's "
+        "tool results below, write the final answer the user should see. "
+        "If the evidence is incomplete, say what was found and what remains.\n\n"
+        f"User task:\n{task}\n\n"
+        f"Tool results:\n{evidence or '(no tool output captured)'}"
+    )
+
+
+def _recover_empty_generation(llm, task: str, state_values: dict) -> str:  # noqa: ANN001
+    """Produce a final answer after an empty-generation stream failure."""
+    current_answer = _extract_current_turn_answer(state_values)
+    if current_answer.strip() and current_answer != "Task completed.":
+        return current_answer
+
+    prompt = _build_recovery_prompt(task, state_values)
+    try:
+        response = llm.invoke([HumanMessage(content=prompt)])
+        text = _content_to_text(getattr(response, "content", response)).strip()
+        if text:
+            return text
+    except Exception:
+        pass
+
+    return (
+        "I used tools and gathered results for this task, but the model returned "
+        "an empty final response before it could synthesize them. Please retry, "
+        "or ask a narrower follow-up and I can continue from the visible output."
+    )
 
 
 def _iter_graph(
@@ -217,7 +307,7 @@ def _iter_graph(
     # -- Final answer fallback (Gemini often returns no streaming tokens) --
     if not accumulated.strip():
         state = graph.get_state(config)
-        candidate = _extract_final_answer(state.values)
+        candidate = _extract_current_turn_answer(state.values)
         if candidate.strip() and candidate != "Task completed.":
             accumulated = candidate
             yield TokenEvent(text=accumulated)  # emit the whole answer as one token
@@ -316,21 +406,48 @@ def stream_agent_events(
         if effective_mode == "chat":
             graph = build_chat_graph(llm, system_prompt)
             input_data = {"messages": [first_message]}
-            yield from _iter_graph(graph, input_data, config, metrics)
-            state = graph.get_state(config)
+            try:
+                streamed_answer = yield from _iter_graph(graph, input_data, config, metrics)
+            except Exception as exc:
+                if not _is_empty_generation_error(exc):
+                    raise
+                state = graph.get_state(config)
+                final = _recover_empty_generation(llm, task, state.values)
+                yield TokenEvent(text=final)
+                streamed_answer = final
+            else:
+                state = graph.get_state(config)
+                final = _extract_current_turn_answer(state.values)
+                if (not final.strip() or final == "Task completed.") and streamed_answer:
+                    final = streamed_answer
 
         else:  # agent (default)
             hook = _make_summarize_hook(llm, metrics)
             tools = get_all_tools_with_plugins()
             graph = build_agent_graph(llm, tools, system_prompt, pre_model_hook=hook)
             input_data = {"messages": [first_message]}
-            yield from _iter_graph(graph, input_data, config, metrics, plan_queue=plan_queue)
-            state = graph.get_state(config)
+            try:
+                streamed_answer = yield from _iter_graph(
+                    graph, input_data, config, metrics, plan_queue=plan_queue
+                )
+            except Exception as exc:
+                if not _is_empty_generation_error(exc):
+                    raise
+                if plan_queue:
+                    yield from _drain_plan_queue(plan_queue)
+                state = graph.get_state(config)
+                final = _recover_empty_generation(llm, task, state.values)
+                yield TokenEvent(text=final)
+                streamed_answer = final
+            else:
+                state = graph.get_state(config)
+                final = _extract_current_turn_answer(state.values)
+                if (not final.strip() or final == "Task completed.") and streamed_answer:
+                    final = streamed_answer
 
         metrics["approx_tokens"] = _approx_tokens(
             state.values.get("messages", [])
         )
-        final = _extract_final_answer(state.values)
         yield DoneEvent(final_answer=final, metrics=metrics)
 
     except Exception as e:

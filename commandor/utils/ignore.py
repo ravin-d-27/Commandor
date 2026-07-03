@@ -54,13 +54,22 @@ def _parse_patterns(text: str) -> tuple[list[str], list[str]]:
 
 def _match_one(pattern: str, rel_path: str) -> bool:
     """Return True if *rel_path* matches *pattern* (gitignore-style)."""
+    rel_path = rel_path.replace("\\", "/")
+    if rel_path.startswith("./"):
+        rel_path = rel_path[2:]
+
+    directory_pattern = pattern.endswith("/")
+
     # Strip trailing slash for directory patterns
-    pat = pattern.rstrip("/")
+    pat = pattern.replace("\\", "/").rstrip("/")
 
     # Anchored pattern (starts with /) → must match from project root
     anchored = pat.startswith("/")
     if anchored:
         pat = pat[1:]
+
+    if directory_pattern and anchored:
+        return fnmatch.fnmatch(rel_path, pat) or rel_path.startswith(f"{pat}/")
 
     # Direct match (file or directory name)
     if fnmatch.fnmatch(rel_path, pat):

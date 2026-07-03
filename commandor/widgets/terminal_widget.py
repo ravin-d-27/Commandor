@@ -1,7 +1,8 @@
 """terminal_widget.py — Unified single-pane terminal widget for Commandor.
 
 Handles:
-  - Direct shell command execution (subprocess in worker thread)
+  - Natural-language agent tasks by default
+  - Direct shell command execution via `$ <cmd>` / `!<cmd>`
   - AI commands via /slash syntax: /agent, /chat, /ask, /plan, /assist
   - /setup interactive wizard (multi-step state machine)
   - /provider, /model, /providers, /sessions, /api sub-commands
@@ -120,6 +121,7 @@ HELP_TEXT = """\
 ## AI Commands
 | Command | Description |
 |---------|-------------|
+| plain text | Run the AI agent naturally (same as `/agent <task>`) |
 | `/agent <task>` | Run the AI agent (plans, uses tools, executes autonomously) |
 | `/assist <task>` | Agent mode with confirmations before each tool call |
 | `/plan <task>` | Plan first, then execute the approved plan |
@@ -174,8 +176,9 @@ HELP_TEXT = """\
 | `/export [md|json|html] [file]` | Save session — markdown (default), JSON, or HTML |
 
 ## Shell
-Any command that doesn't start with `/` is run as a shell command.
-`cd` is handled natively and updates the prompt path.
+Plain text runs the AI agent by default.
+Prefix shell commands with `$ ` or `!`, for example `$ ls` or `!git status`.
+`$ cd <path>` is handled natively and updates the prompt path.
 
 ## Notes
 The agent decides internally whether to plan, ask clarifying questions,
@@ -259,7 +262,7 @@ class TerminalWidget(Widget):
         yield Static("", id="stream-preview")
         with Horizontal(id="input-bar"):
             yield Static(self._prompt_text(), id="prompt-label")
-            yield Input(placeholder="", id="cmd-input")
+            yield Input(placeholder="Describe a task, or use $ <cmd> for shell", id="cmd-input")
 
     def on_mount(self) -> None:
         self.query_one("#stream-preview").display = False
@@ -367,7 +370,7 @@ class TerminalWidget(Widget):
         log.write(Text("◆  Commandor", style="bold #ffd700"))
         log.write(Text(f"   Provider: {provider}  ·  Model: {model}", style="#7a6b4a"))
         log.write(Text(
-            "   Type a shell command or /agent <task> to start. /help for more.",
+            "   Type a task naturally. Use $ <cmd> for shell, /help for more.",
             style="#7a6b4a",
         ))
         log.write(Text(""))
@@ -495,7 +498,22 @@ class TerminalWidget(Widget):
             log.write(Text(f"  Unknown command: {cmd}  (try /help)", style="#cc2200"))
 
         else:
-            self._run_shell(text)
+            shell_cmd = _shell_escape_command(text)
+            if shell_cmd is not None:
+                if not shell_cmd:
+                    log.write(Text("  Usage: $ <shell-command> or !<shell-command>", style="#cc2200"))
+                    return
+                self._run_shell(shell_cmd)
+                return
+
+            expanded, files = _expand_files(text, cwd=self._cwd)
+            if files:
+                log.write(Text.from_markup(
+                    f"  [#c8a800]◈[/#c8a800]  Loaded {len(files)} file(s): "
+                    + ", ".join(f"[bold]{f}[/bold]" for f in files[:5])
+                    + ("…" if len(files) > 5 else "")
+                ))
+            self._run_ai(expanded, mode="agent")
 
     # ------------------------------------------------------------------
     # Shell execution
@@ -1560,6 +1578,21 @@ class TerminalWidget(Widget):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _shell_escape_command(text: str) -> Optional[str]:
+    """Return the shell command from an explicit shell escape, or None.
+
+    Plain text is reserved for agent tasks.  Users can still run shell
+    commands with familiar terminal-style prefixes: ``$ ls`` or ``!git status``.
+    """
+    if text == "$":
+        return ""
+    if text.startswith("$ "):
+        return text[2:].strip()
+    if text.startswith("!"):
+        return text[1:].strip()
+    return None
+
 
 def _expand_files(text: str, cwd: str = "") -> tuple[str, list[str]]:
     """Expand @filename and @glob references to file contents inline.

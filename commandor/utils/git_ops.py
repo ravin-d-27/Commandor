@@ -192,6 +192,8 @@ def git_log(n: int = 10, oneline: bool = True,
     args = ["log", fmt, f"-n{n}"]
     code, out, err = _run_git(args, cwd=cwd)
     if code != 0:
+        if "does not have any commits yet" in err.lower():
+            return "[dim]  No commits yet.[/dim]"
         return f"[red]git log failed:[/red] {err.strip()}"
 
     if not out.strip():

@@ -609,7 +609,7 @@ def delegate_task_tool(subtask: str, use_tools: bool = False) -> str:
 
 
 @tool
-def parallel_delegate_tool(tasks: list) -> str:
+def parallel_delegate_tool(tasks: List[str]) -> str:
     """Run multiple sub-tasks concurrently and return their answers.
 
     Each task is a self-contained instruction.  Up to 4 sub-agents run
@@ -617,9 +617,8 @@ def parallel_delegate_tool(tasks: list) -> str:
     "review these 3 PRs" or "look up docs for A, B, C in parallel".
 
     Args:
-        tasks: A list of task strings, OR a list of dicts of the form
-               {"subtask": "...", "use_tools": False}.  Strings are
-               treated as chat-only sub-tasks.
+        tasks: A list of task strings.  Strings are treated as
+               chat-only sub-tasks.
 
     Returns:
         A formatted block with one section per sub-task, in the same
@@ -657,7 +656,7 @@ def parallel_delegate_tool(tasks: list) -> str:
 # ---------------------------------------------------------------------------
 
 @tool
-def create_task_plan(tasks: list) -> str:
+def create_task_plan(tasks: List[str]) -> str:
     """Show the user a live numbered task plan in the terminal UI.
 
     WHEN TO USE: Call this at the very start of any complex multi-step task
